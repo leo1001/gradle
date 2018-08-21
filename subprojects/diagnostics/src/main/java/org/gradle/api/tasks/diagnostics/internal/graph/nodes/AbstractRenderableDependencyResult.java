@@ -55,9 +55,8 @@ public abstract class AbstractRenderableDependencyResult extends AbstractRendera
      * @return Indicates whether version differs
      */
     private boolean isSameGroupAndModuleButDifferentVersion(ModuleComponentSelector requested, ModuleComponentIdentifier selected) {
-        return requested.getGroup().equals(selected.getGroup())
-            && requested.getModule().equals(selected.getModule())
-            && !requested.getVersionConstraint().getPreferredVersion().equals(selected.getVersion());
+        return requested.getModuleIdentifier().equals(selected.getModuleIdentifier())
+            && !requested.getVersion().equals(selected.getVersion());
     }
 
     /**

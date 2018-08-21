@@ -239,7 +239,7 @@ class TaskInputPropertiesIntegrationTest extends AbstractIntegrationSpec {
         expect:
         executer.expectDeprecationWarning()
         succeeds "test"
-        output.contains "The chaining of the $method method has been deprecated and is scheduled to be removed in Gradle 5.0. Use '$method' on TaskInputs directly instead."
+        output.contains "The chaining of the $method method has been deprecated. This is scheduled to be removed in Gradle 5.0. Use '$method' on TaskInputs directly instead."
 
         where:
         method                     | call
@@ -492,7 +492,7 @@ task someTask(type: SomeTask) {
         "${Provider.name}<String>"       | "providers.provider { 'a' }"    | "providers.provider { 'b' }"
     }
 
-    def "null input properties registered via TaskInputs.property are reported"() {
+    def "null input properties registered via TaskInputs.property are not allowed"() {
         buildFile << """
             task test {
                 inputs.property("input", { null })
@@ -500,10 +500,9 @@ task someTask(type: SomeTask) {
             }
         """
         expect:
-        executer.expectDeprecationWarning().withFullDeprecationStackTraceDisabled()
-        succeeds "test"
-        output.contains """A problem was found with the configuration of task ':test'. Registering invalid inputs and outputs via TaskInputs and TaskOutputs methods has been deprecated and is scheduled to be removed in Gradle 5.0.
- - No value has been specified for property 'input'."""
+        fails "test"
+        failure.assertHasDescription("A problem was found with the configuration of task ':test'.")
+        failure.assertHasCause("No value has been specified for property 'input'.")
     }
 
     def "optional null input properties registered via TaskInputs.property are allowed"() {
@@ -518,7 +517,7 @@ task someTask(type: SomeTask) {
     }
 
     @Unroll
-    def "null input files registered via TaskInputs.#method are reported"() {
+    def "null input files registered via TaskInputs.#method are not allowed"() {
         buildFile << """
             task test {
                 inputs.${method}({ null }) withPropertyName "input"
@@ -526,10 +525,9 @@ task someTask(type: SomeTask) {
             }
         """
         expect:
-        executer.expectDeprecationWarning().withFullDeprecationStackTraceDisabled()
-        succeeds "test"
-        output.contains """A problem was found with the configuration of task ':test'. Registering invalid inputs and outputs via TaskInputs and TaskOutputs methods has been deprecated and is scheduled to be removed in Gradle 5.0.
- - No value has been specified for property 'input'."""
+        fails "test"
+        failure.assertHasDescription("A problem was found with the configuration of task ':test'.")
+        failure.assertHasCause("No value has been specified for property 'input'.")
 
         where:
         method << ["file", "files", "dir"]
@@ -551,7 +549,7 @@ task someTask(type: SomeTask) {
     }
 
     @Unroll
-    def "null output files registered via TaskOutputs.#method are reported"() {
+    def "null output files registered via TaskOutputs.#method are not allowed"() {
         buildFile << """
             task test {
                 outputs.${method}({ null }) withPropertyName "output"
@@ -559,10 +557,9 @@ task someTask(type: SomeTask) {
             }
         """
         expect:
-        executer.expectDeprecationWarning().withFullDeprecationStackTraceDisabled()
-        succeeds "test"
-        output.contains """A problem was found with the configuration of task ':test'. Registering invalid inputs and outputs via TaskInputs and TaskOutputs methods has been deprecated and is scheduled to be removed in Gradle 5.0.
- - No value has been specified for property 'output'."""
+        fails "test"
+        failure.assertHasDescription("A problem was found with the configuration of task ':test'.")
+        failure.assertHasCause("No value has been specified for property 'output'.")
 
         where:
         method << ["file", "files", "dir", "dirs"]
@@ -584,7 +581,7 @@ task someTask(type: SomeTask) {
     }
 
     @Unroll
-    def "missing input files registered via TaskInputs.#method are reported"() {
+    def "missing input files registered via TaskInputs.#method are not allowed"() {
         buildFile << """
             task test {
                 inputs.${method}({ "missing" }) withPropertyName "input"
@@ -593,10 +590,9 @@ task someTask(type: SomeTask) {
         """
 
         expect:
-        executer.expectDeprecationWarning().withFullDeprecationStackTraceDisabled()
-        succeeds "test"
-        output.contains """A problem was found with the configuration of task ':test'. Registering invalid inputs and outputs via TaskInputs and TaskOutputs methods has been deprecated and is scheduled to be removed in Gradle 5.0.
- - $type '${file("missing")}' specified for property 'input' does not exist."""
+        fails "test"
+        failure.assertHasDescription("A problem was found with the configuration of task ':test'.")
+        failure.assertHasCause("$type '${file("missing")}' specified for property 'input' does not exist.")
 
         where:
         method | type
@@ -605,7 +601,7 @@ task someTask(type: SomeTask) {
     }
 
     @Unroll
-    def "wrong input file type registered via TaskInputs.#method is reported"() {
+    def "wrong input file type registered via TaskInputs.#method is not allowed"() {
         file("input-file.txt").touch()
         file("input-dir").createDir()
         buildFile << """
@@ -616,10 +612,9 @@ task someTask(type: SomeTask) {
         """
 
         expect:
-        executer.expectDeprecationWarning().withFullDeprecationStackTraceDisabled()
-        succeeds "test"
-        output.contains """A problem was found with the configuration of task ':test'. Registering invalid inputs and outputs via TaskInputs and TaskOutputs methods has been deprecated and is scheduled to be removed in Gradle 5.0.
- - ${type.capitalize()} '${file(path)}' specified for property 'input' is not a $type."""
+        fails "test"
+        failure.assertHasDescription("A problem was found with the configuration of task ':test'.")
+        failure.assertHasCause("${type.capitalize()} '${file(path)}' specified for property 'input' is not a $type.")
 
         where:
         method | path             | type
@@ -628,7 +623,7 @@ task someTask(type: SomeTask) {
     }
 
     @Unroll
-    def "wrong output file type registered via TaskOutputs.#method is reported"() {
+    def "wrong output file type registered via TaskOutputs.#method is not allowed"() {
         file("input-file.txt").touch()
         file("input-dir").createDir()
         buildFile << """
@@ -639,20 +634,15 @@ task someTask(type: SomeTask) {
         """
 
         expect:
-        executer.expectDeprecationWarning().withFullDeprecationStackTraceDisabled()
-        if (expectToFail) {
-            fails "test"
-        } else {
-            succeeds "test"
-        }
-        output.contains message.replace("<PATH>", file(path).absolutePath)
+        fails "test"
+        failure.assertHasCause(message.replace("<PATH>", file(path).absolutePath))
 
         where:
-        method  | path             | expectToFail | message
-        "file"  | "input-dir"      | false        | "Cannot write to file '<PATH>' specified for property 'output' as it is a directory."
-        "files" | "input-dir"      | false        | "Cannot write to file '<PATH>' specified for property 'output' as it is a directory."
-        "dir"   | "input-file.txt" | true         | "Directory '<PATH>' specified for property 'output' is not a directory."
-        "dirs"  | "input-file.txt" | true         | "Directory '<PATH>' specified for property 'output' is not a directory."
+        method  | path             | message
+        "file"  | "input-dir"      | "Cannot write to file '<PATH>' specified for property 'output' as it is a directory."
+        "files" | "input-dir"      | "Cannot write to file '<PATH>' specified for property 'output' as it is a directory."
+        "dir"   | "input-file.txt" | "Directory '<PATH>' specified for property 'output' is not a directory."
+        "dirs"  | "input-file.txt" | "Directory '<PATH>' specified for property 'output' is not a directory."
     }
 
     def "can specify null as an input property in ad-hoc task"() {

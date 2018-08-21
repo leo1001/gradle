@@ -57,9 +57,6 @@ import javax.inject.Inject;
  *     tasks.withType(JavaCompile) {
  *         //enable compilation in a separate daemon process
  *         options.fork = true
- *
- *         //enable incremental compilation
- *         options.incremental = true
  *     }
  * </pre>
  */
@@ -72,10 +69,6 @@ public class JavaCompile extends AbstractCompile {
         CompileOptions compileOptions = getServices().get(ObjectFactory.class).newInstance(CompileOptions.class);
         this.compileOptions = compileOptions;
         CompilerForkUtils.doNotCacheIfForkingViaExecutable(compileOptions, getOutputs());
-
-        // this mimics the behavior of the Ant javac task (and therefore AntJavaCompiler),
-        // which silently excludes files not ending in .java
-        include("**/*.java");
     }
 
     /**

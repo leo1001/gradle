@@ -17,7 +17,6 @@ package org.gradle.execution;
 
 import org.gradle.api.Task;
 import org.gradle.api.execution.TaskExecutionGraph;
-import org.gradle.api.execution.TaskExecutionListener;
 import org.gradle.api.specs.Spec;
 
 import java.util.Collection;
@@ -62,5 +61,8 @@ public interface TaskExecutionGraphInternal extends TaskExecutionGraph {
      */
     Set<Task> getFilteredTasks();
 
-    TaskExecutionListener getTaskExecutionListenerSource();
+    /**
+     * Returns the number of work items in the graph.
+     */
+    int size();
 }

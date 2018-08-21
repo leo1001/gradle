@@ -53,7 +53,7 @@ dependencies {
 }
 """
 
-        lockfileFixture.createLockfile('lockedConf',['org:bar:1.0'])
+        lockfileFixture.createLockfile('lockedConf', ['org:bar:1.0'])
 
         when:
         succeeds 'dependencies'
@@ -124,7 +124,7 @@ dependencies {
         if (level == 'integration') {
             version += '-SNAPSHOT'
         }
-        lockfileFixture.createLockfile('lockedConf',["org:bar:$version".toString()])
+        lockfileFixture.createLockfile('lockedConf', ["org:bar:$version".toString()])
 
         when:
         succeeds 'dependencies'
@@ -133,9 +133,59 @@ dependencies {
         outputContains("org:bar:$resolvedVersion")
 
         where:
-        level           | resolvedVersion
-        'release'       | '1.0'
-        'integration'   | '1.0-SNAPSHOT'
+        level         | resolvedVersion
+        'release'     | '1.0'
+        'integration' | '1.0-SNAPSHOT'
+    }
+
+    @Unroll
+    def "can write lock when using #version"() {
+        mavenRepo.module('org', 'bar', '1.0').publish()
+        mavenRepo.module('org', 'bar', '1.0-SNAPSHOT').publish()
+        mavenRepo.module('org', 'bar', '1.1').publish()
+        mavenRepo.module('org', 'bar', '2.0').publish()
+        mavenRepo.module('org', 'bar', '2.1-SNAPSHOT').publish()
+        mavenRepo.module('org', 'bar', '2.1').publish()
+        mavenRepo.module('org', 'bar', '2.2-SNAPSHOT').publish()
+
+        buildFile << """
+dependencyLocking {
+    lockAllConfigurations()
+}
+
+repositories {
+    maven {
+        name 'repo'
+        url '${mavenRepo.uri}'
+    }
+}
+configurations {
+    lockedConf
+}
+
+dependencies {
+    lockedConf 'org:bar:$version'
+}
+"""
+
+        when:
+        succeeds 'dependencies', '--write-locks'
+
+        then:
+        outputContains("org:bar:$version -> $expectedVersion")
+
+        and:
+        lockfileFixture.verifyLockfile('lockedConf', ["org:bar:$expectedVersion"])
+
+        where:
+        version              | expectedVersion
+        '[1.0, 2.0)'         | '1.1'
+        '1.+'                | '1.1'
+        '[1.0,)'             | '2.2-SNAPSHOT'
+        '+'                  | '2.2-SNAPSHOT'
+        'latest.release'     | '2.1'
+        'latest.integration' | '2.2-SNAPSHOT'
+
     }
 
     def 'kind of locks snapshots but warns about it'() {
@@ -180,8 +230,53 @@ dependencies {
     def "can update a single lock entry when using #version"() {
         mavenRepo.module('org', 'bar', '1.0').publish()
         mavenRepo.module('org', 'bar', '1.1').publish()
+        mavenRepo.module('org', 'bar', '2.0').publish()
+        mavenRepo.module('org', 'bar', '2.1').publish()
+        mavenRepo.module('org', 'bar', '2.2-SNAPSHOT').withNonUniqueSnapshots().publish()
         mavenRepo.module('org', 'foo', '1.0').publish()
         mavenRepo.module('org', 'foo', '1.1').publish()
+        mavenRepo.module('org', 'foo', '2.0').publish()
+        mavenRepo.module('org', 'foo', '2.1').publish()
+        mavenRepo.module('org', 'foo', '2.2-SNAPSHOT').withNonUniqueSnapshots().publish()
+
+        buildFile << """
+dependencyLocking {
+    lockAllConfigurations()
+}
+repositories {
+    maven {
+        name 'repo'
+        url '${mavenRepo.uri}'
+    }
+}
+configurations {
+    lockedConf
+}
+dependencies {
+    lockedConf 'org:bar:$version'
+    lockedConf 'org:foo:$version'
+}
+"""
+        lockfileFixture.createLockfile('lockedConf', ['org:bar:1.0', 'org:foo:1.0'])
+
+        when:
+        succeeds 'dependencies', '--update-locks', 'org:foo'
+
+        then:
+        lockfileFixture.verifyLockfile('lockedConf', ['org:bar:1.0', "org:foo:$expectedVersion"])
+
+        where:
+        version              | expectedVersion
+        '[1.0, 2.0)'         | '1.1'
+        '1.+'                | '1.1'
+        '[1.0,)'             | '2.2-SNAPSHOT'
+        '+'                  | '2.2-SNAPSHOT'
+        'latest.release'     | '2.1'
+        'latest.integration' | '2.2-SNAPSHOT'
+    }
+
+    def 'locking works with default dependency action'() {
+        mavenRepo.module('org', 'foo', '1.0').publish()
 
         buildFile << """
 dependencyLocking {
@@ -194,25 +289,29 @@ repositories {
         url '${mavenRepo.uri}'
     }
 }
+
 configurations {
-    lockedConf
+    lockedConf {
+        defaultDependencies { deps ->
+            deps.add(project.dependencies.create('org:foo:1.0'))
+        }
+    }
 }
 
-dependencies {
-    lockedConf 'org:bar:$version'
-    lockedConf 'org:foo:$version'
+task copyFiles(type: Copy) {
+    from configurations.lockedConf
+    into 'build/copied'
 }
 """
-        lockfileFixture.createLockfile('lockedConf', ['org:bar:1.0', 'org:foo:1.0'])
-
         when:
-        succeeds 'dependencies', '--update-locks', 'org:foo'
+        succeeds 'copyFiles', '--write-locks'
 
         then:
-        lockfileFixture.verifyLockfile('lockedConf', ['org:bar:1.0', 'org:foo:1.1'])
+        lockfileFixture.verifyLockfile('lockedConf', ['org:foo:1.0'])
 
-        where:
-        version << ['[1.0,2.0)', '1.+', '+']//, 'latest.release']
+        and:
+        succeeds 'copyFiles'
+
     }
 
 }

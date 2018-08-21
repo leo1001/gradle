@@ -257,8 +257,7 @@ public class DefaultMavenPublication implements MavenPublicationInternal {
             }
             Set<MavenDependency> dependencyConstraints = dependencyConstraintsFor(usageContext.getUsage());
             for (DependencyConstraint dependency : usageContext.getDependencyConstraints()) {
-                if (seenConstraints.add(dependency)
-                    && !dependency.getVersionConstraint().getPreferredVersion().isEmpty()) {
+                if (seenConstraints.add(dependency) && dependency.getVersion() != null) {
                     addDependencyConstraint(dependency, dependencyConstraints);
                 }
             }
@@ -470,7 +469,7 @@ public class DefaultMavenPublication implements MavenPublicationInternal {
     }
 
     public ModuleVersionIdentifier getCoordinates() {
-        return new DefaultModuleVersionIdentifier(getGroupId(), getArtifactId(), getVersion());
+        return DefaultModuleVersionIdentifier.newId(getGroupId(), getArtifactId(), getVersion());
     }
 
     @Nullable

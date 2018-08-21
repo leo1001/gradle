@@ -31,9 +31,9 @@ import java.util.Set;
  */
 public interface TaskExecutionPlan extends Describable {
     @Nullable
-    TaskInfo selectNextTask(WorkerLeaseRegistry.WorkerLease workerLease, ResourceLockState resourceLockState);
+    WorkInfo selectNext(WorkerLeaseRegistry.WorkerLease workerLease, ResourceLockState resourceLockState);
 
-    void taskComplete(TaskInfo taskInfo);
+    void workComplete(WorkInfo workInfo);
 
     void abortAllAndFail(Throwable t);
 
@@ -69,4 +69,8 @@ public interface TaskExecutionPlan extends Describable {
 
     boolean hasWorkRemaining();
 
+    /**
+     * Returns the number of work items in the plan.
+     */
+    int size();
 }

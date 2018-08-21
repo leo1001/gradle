@@ -16,42 +16,59 @@
 
 package org.gradle.api.internal.artifacts.transform;
 
+import org.gradle.internal.operations.BuildOperationCategory;
 import org.gradle.internal.operations.BuildOperationContext;
-import org.gradle.internal.operations.RunnableBuildOperation;
 import org.gradle.internal.operations.BuildOperationDescriptor;
+import org.gradle.internal.operations.RunnableBuildOperation;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import java.io.File;
 import java.util.List;
 
 class TransformFileOperation implements RunnableBuildOperation {
+    private static final Logger LOGGER = LoggerFactory.getLogger(TransformFileOperation.class);
     private final File file;
     private final ArtifactTransformer transform;
+    private final ArtifactTransformListener transformListener;
     private Throwable failure;
     private List<File> result;
 
-    TransformFileOperation(File file, ArtifactTransformer transform) {
+    TransformFileOperation(File file, ArtifactTransformer transform, ArtifactTransformListener transformListener) {
         this.file = file;
         this.transform = transform;
+        this.transformListener = transformListener;
     }
 
     @Override
-    public void run(BuildOperationContext context) {
+    public void run(@Nullable BuildOperationContext context) {
+        transformListener.beforeTransform(transform, null, file);
         try {
+            if (LOGGER.isInfoEnabled()) {
+                LOGGER.info("Executing transform {} on file {}", transform.getDisplayName(), file);
+            }
             result = transform.transform(file);
         } catch (Throwable t) {
             failure = t;
         }
+        transformListener.afterTransform(transform, null, file, failure);
     }
 
     @Override
     public BuildOperationDescriptor.Builder description() {
-        return BuildOperationDescriptor.displayName("Apply " + transform.getDisplayName() + " to " + file);
+        String displayName = "Transform " + file.getName() + " with " + transform.getDisplayName();
+        return BuildOperationDescriptor.displayName(displayName)
+            .progressDisplayName(displayName)
+            .operationType(BuildOperationCategory.UNCATEGORIZED);
     }
 
+    @Nullable
     public Throwable getFailure() {
         return failure;
     }
 
+    @Nullable
     public List<File> getResult() {
         return result;
     }

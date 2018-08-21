@@ -21,6 +21,7 @@ import org.gradle.api.artifacts.DependencySet
 import org.gradle.api.artifacts.component.BuildIdentifier
 import org.gradle.api.internal.artifacts.ConfigurationResolver
 import org.gradle.api.internal.artifacts.DefaultImmutableModuleIdentifierFactory
+import org.gradle.api.internal.artifacts.DefaultModuleIdentifier
 import org.gradle.api.internal.artifacts.DefaultResolverResults
 import org.gradle.api.internal.artifacts.component.ComponentIdentifierFactory
 import org.gradle.api.internal.artifacts.configurations.ConfigurationInternal
@@ -131,6 +132,25 @@ class ShortCircuitEmptyConfigurationResolverSpec extends Specification {
         0 * delegate._
     }
 
+    def 'empty graph result for build dependencies does not interact with dependency locking'() {
+        given:
+        ResolutionStrategyInternal resolutionStrategy = Mock()
+
+        configuration.name >> 'lockedConf'
+        configuration.resolutionStrategy >> resolutionStrategy
+        dependencies.isEmpty() >> true
+        dependencyConstraints.isEmpty() >> true
+        configuration.getAllDependencies() >> dependencies
+        configuration.getAllDependencyConstraints() >> dependencyConstraints
+
+        when:
+        dependencyResolver.resolveBuildDependencies(configuration, results)
+
+        then:
+
+        0 * resolutionStrategy._
+    }
+
     def 'empty graph result still interacts with dependency locking'() {
         given:
         ResolutionStrategyInternal resolutionStrategy = Mock()
@@ -179,7 +199,7 @@ class ShortCircuitEmptyConfigurationResolverSpec extends Specification {
         1 * resolutionStrategy.dependencyLockingProvider >> lockingProvider
         1 * lockingProvider.loadLockState('lockedConf') >> lockingState
         1 * lockingState.mustValidateLockState() >> true
-        3 * lockingState.lockedDependencies >> [DefaultModuleComponentIdentifier.newId('org', 'foo', '1.0')]
+        3 * lockingState.lockedDependencies >> [DefaultModuleComponentIdentifier.newId(DefaultModuleIdentifier.newId('org', 'foo'), '1.0')]
     }
 
     def "delegates to backing service to resolve build dependencies when there are one or more dependencies"() {

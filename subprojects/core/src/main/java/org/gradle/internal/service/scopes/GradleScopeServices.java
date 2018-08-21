@@ -16,10 +16,11 @@
 package org.gradle.internal.service.scopes;
 
 import org.gradle.api.Action;
+import org.gradle.api.execution.TaskExecutionGraphListener;
+import org.gradle.api.execution.TaskExecutionListener;
 import org.gradle.api.internal.GradleInternal;
 import org.gradle.api.internal.InstantiatorFactory;
 import org.gradle.api.internal.artifacts.dsl.dependencies.ProjectFinder;
-import org.gradle.api.internal.changedetection.state.FileSystemSnapshotter;
 import org.gradle.api.internal.changedetection.state.InMemoryCacheDecoratorFactory;
 import org.gradle.api.internal.changedetection.state.WellKnownFileLocations;
 import org.gradle.api.internal.file.FileResolver;
@@ -38,6 +39,8 @@ import org.gradle.cache.internal.FileContentCacheFactory;
 import org.gradle.cache.internal.SplitFileContentCacheFactory;
 import org.gradle.composite.internal.IncludedBuildTaskGraph;
 import org.gradle.configuration.ConfigurationTargetIdentifier;
+import org.gradle.configuration.internal.ListenerBuildOperationDecorator;
+import org.gradle.configuration.internal.UserCodeApplicationContext;
 import org.gradle.execution.BuildConfigurationAction;
 import org.gradle.execution.BuildConfigurationActionExecuter;
 import org.gradle.execution.BuildExecuter;
@@ -54,11 +57,18 @@ import org.gradle.execution.TaskSelector;
 import org.gradle.execution.commandline.CommandLineTaskConfigurer;
 import org.gradle.execution.commandline.CommandLineTaskParser;
 import org.gradle.execution.taskgraph.DefaultTaskExecutionGraph;
+import org.gradle.execution.taskgraph.LocalTaskInfoExecutor;
+import org.gradle.execution.taskgraph.TaskDependencyResolver;
+import org.gradle.execution.taskgraph.TaskInfoFactory;
+import org.gradle.execution.taskgraph.TaskInfoWorkDependencyResolver;
 import org.gradle.execution.taskgraph.TaskPlanExecutor;
+import org.gradle.execution.taskgraph.WorkInfoDependencyResolver;
+import org.gradle.execution.taskgraph.WorkInfoExecutor;
 import org.gradle.internal.Factory;
 import org.gradle.internal.cleanup.BuildOutputCleanupRegistry;
 import org.gradle.internal.cleanup.DefaultBuildOutputCleanupRegistry;
 import org.gradle.internal.concurrent.CompositeStoppable;
+import org.gradle.internal.event.ListenerBroadcast;
 import org.gradle.internal.event.ListenerManager;
 import org.gradle.internal.id.UniqueId;
 import org.gradle.internal.logging.LoggingManagerInternal;
@@ -76,6 +86,7 @@ import org.gradle.internal.scopeids.id.WorkspaceScopeId;
 import org.gradle.internal.service.DefaultServiceRegistry;
 import org.gradle.internal.service.ServiceRegistration;
 import org.gradle.internal.service.ServiceRegistry;
+import org.gradle.internal.snapshot.FileSystemSnapshotter;
 import org.gradle.internal.work.WorkerLeaseService;
 
 import java.util.Arrays;
@@ -153,14 +164,54 @@ public class GradleScopeServices extends DefaultServiceRegistry {
         };
     }
 
-    TaskExecutionGraphInternal createTaskExecutionGraph(ListenerManager listenerManager, TaskPlanExecutor taskPlanExecutor, BuildOperationExecutor buildOperationExecutor, WorkerLeaseService workerLeaseService, ResourceLockCoordinationService coordinationService, GradleInternal gradleInternal, IncludedBuildTaskGraph includedBuildTaskGraph) {
+    TaskInfoFactory createTaskInfoFactory(GradleInternal gradle, IncludedBuildTaskGraph includedBuildTaskGraph) {
+        return new TaskInfoFactory(gradle, includedBuildTaskGraph);
+    }
+
+    TaskInfoWorkDependencyResolver createTaskInfoWorkResolver(TaskInfoFactory taskInfoFactory) {
+        return new TaskInfoWorkDependencyResolver(taskInfoFactory);
+    }
+
+    TaskDependencyResolver createTaskDependencyResolver(List<WorkInfoDependencyResolver> workResolvers) {
+        return new TaskDependencyResolver(workResolvers);
+    }
+
+    LocalTaskInfoExecutor createLocalTaskInfoExecutor() {
         Factory<TaskExecuter> taskExecuterFactory = new Factory<TaskExecuter>() {
             @Override
             public TaskExecuter create() {
                 return get(TaskExecuter.class);
             }
         };
-        return new DefaultTaskExecutionGraph(listenerManager, taskPlanExecutor, taskExecuterFactory, buildOperationExecutor, workerLeaseService, coordinationService, gradleInternal, includedBuildTaskGraph);
+        return new LocalTaskInfoExecutor(taskExecuterFactory);
+    }
+
+    ListenerBroadcast<TaskExecutionListener> createTaskExecutionListenerBroadcast(ListenerManager listenerManager) {
+        return listenerManager.createAnonymousBroadcaster(TaskExecutionListener.class);
+    }
+
+    TaskExecutionListener createTaskExecutionListener(ListenerBroadcast<TaskExecutionListener> broadcast) {
+        return broadcast.getSource();
+    }
+
+    ListenerBroadcast<TaskExecutionGraphListener> createTaskExecutionGraphListenerBroadcast(ListenerManager listenerManager) {
+        return listenerManager.createAnonymousBroadcaster(TaskExecutionGraphListener.class);
+    }
+
+    TaskExecutionGraphInternal createTaskExecutionGraph(
+        TaskPlanExecutor taskPlanExecutor,
+        List<WorkInfoExecutor> workInfoExecutors,
+        BuildOperationExecutor buildOperationExecutor,
+        ListenerBuildOperationDecorator listenerBuildOperationDecorator,
+        WorkerLeaseService workerLeaseService,
+        ResourceLockCoordinationService coordinationService,
+        GradleInternal gradleInternal,
+        TaskInfoFactory taskInfoFactory,
+        TaskDependencyResolver dependencyResolver,
+        ListenerBroadcast<TaskExecutionListener> taskListeners,
+        ListenerBroadcast<TaskExecutionGraphListener> graphListeners
+    ) {
+        return new DefaultTaskExecutionGraph(taskPlanExecutor, workInfoExecutors, buildOperationExecutor, listenerBuildOperationDecorator, workerLeaseService, coordinationService, gradleInternal, taskInfoFactory, dependencyResolver, graphListeners, taskListeners);
     }
 
     ServiceRegistryFactory createServiceRegistryFactory(final ServiceRegistry services) {
@@ -181,9 +232,9 @@ public class GradleScopeServices extends DefaultServiceRegistry {
         return parentRegistry.createChild(get(GradleInternal.class).getClassLoaderScope());
     }
 
-    PluginManagerInternal createPluginManager(Instantiator instantiator, GradleInternal gradleInternal, PluginRegistry pluginRegistry, InstantiatorFactory instantiatorFactory, BuildOperationExecutor buildOperationExecutor) {
+    PluginManagerInternal createPluginManager(Instantiator instantiator, GradleInternal gradleInternal, PluginRegistry pluginRegistry, InstantiatorFactory instantiatorFactory, BuildOperationExecutor buildOperationExecutor, UserCodeApplicationContext userCodeApplicationContext) {
         PluginTarget target = new ImperativeOnlyPluginTarget<GradleInternal>(gradleInternal);
-        return instantiator.newInstance(DefaultPluginManager.class, pluginRegistry, instantiatorFactory.inject(this), target, buildOperationExecutor);
+        return instantiator.newInstance(DefaultPluginManager.class, pluginRegistry, instantiatorFactory.inject(this), target, buildOperationExecutor, userCodeApplicationContext);
     }
 
     FileContentCacheFactory createFileContentCacheFactory(FileContentCacheFactory globalCacheFactory, ListenerManager listenerManager, FileSystemSnapshotter fileSystemSnapshotter, CacheRepository cacheRepository, InMemoryCacheDecoratorFactory inMemoryCacheDecoratorFactory, Gradle gradle, WellKnownFileLocations wellKnownFileLocations) {

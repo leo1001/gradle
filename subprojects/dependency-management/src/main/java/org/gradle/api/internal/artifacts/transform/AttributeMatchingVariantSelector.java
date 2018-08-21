@@ -39,13 +39,22 @@ class AttributeMatchingVariantSelector implements VariantSelector {
     private final ImmutableAttributesFactory attributesFactory;
     private final ImmutableAttributes requested;
     private final boolean ignoreWhenNoMatches;
+    private final ArtifactTransformListener transformListener;
 
-    AttributeMatchingVariantSelector(ConsumerProvidedVariantFinder consumerProvidedVariantFinder, AttributesSchemaInternal schema, ImmutableAttributesFactory attributesFactory, AttributeContainerInternal requested, boolean ignoreWhenNoMatches) {
+    AttributeMatchingVariantSelector(
+        ConsumerProvidedVariantFinder consumerProvidedVariantFinder,
+        AttributesSchemaInternal schema,
+        ImmutableAttributesFactory attributesFactory,
+        AttributeContainerInternal requested,
+        boolean ignoreWhenNoMatches,
+        ArtifactTransformListener transformListener
+    ) {
         this.consumerProvidedVariantFinder = consumerProvidedVariantFinder;
         this.schema = schema;
         this.attributesFactory = attributesFactory;
         this.requested = requested.asImmutable();
         this.ignoreWhenNoMatches = ignoreWhenNoMatches;
+        this.transformListener = transformListener;
     }
 
     @Override
@@ -86,7 +95,10 @@ class AttributeMatchingVariantSelector implements VariantSelector {
         }
         if (candidates.size() == 1) {
             Pair<ResolvedVariant, ConsumerVariantMatchResult.ConsumerVariant> result = candidates.get(0);
-            return new ConsumerProvidedResolvedVariant(result.getLeft().getArtifacts(), result.getRight().attributes, result.getRight().transformer);
+            ResolvedArtifactSet artifacts = result.getLeft().getArtifacts();
+            AttributeContainerInternal attributes = result.getRight().attributes;
+            ArtifactTransformer transformer = result.getRight().transformer;
+            return new ConsumerProvidedResolvedVariant(artifacts, attributes, transformer, transformListener);
         }
 
         if (!candidates.isEmpty()) {

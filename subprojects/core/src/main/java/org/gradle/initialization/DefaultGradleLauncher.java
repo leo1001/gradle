@@ -32,7 +32,9 @@ import org.gradle.execution.BuildConfigurationActionExecuter;
 import org.gradle.execution.BuildExecuter;
 import org.gradle.execution.MultipleBuildFailures;
 import org.gradle.execution.TaskExecutionGraphInternal;
+import org.gradle.internal.build.PublicBuildPath;
 import org.gradle.internal.concurrent.CompositeStoppable;
+import org.gradle.internal.operations.BuildOperationCategory;
 import org.gradle.internal.operations.BuildOperationContext;
 import org.gradle.internal.operations.BuildOperationDescriptor;
 import org.gradle.internal.operations.BuildOperationExecutor;
@@ -72,7 +74,8 @@ public class DefaultGradleLauncher implements GradleLauncher {
     private final BuildScopeServices buildServices;
     private final List<?> servicesToStop;
     private final IncludedBuildControllers includedBuildControllers;
-    private GradleInternal gradle;
+    private final PublicBuildPath fromBuild;
+    private final GradleInternal gradle;
     private SettingsInternal settings;
     private Stage stage;
 
@@ -81,7 +84,7 @@ public class DefaultGradleLauncher implements GradleLauncher {
                                  BuildListener buildListener, ModelConfigurationListener modelConfigurationListener,
                                  BuildCompletionListener buildCompletionListener, BuildOperationExecutor operationExecutor,
                                  BuildConfigurationActionExecuter buildConfigurationActionExecuter, BuildExecuter buildExecuter,
-                                 BuildScopeServices buildServices, List<?> servicesToStop, IncludedBuildControllers includedBuildControllers) {
+                                 BuildScopeServices buildServices, List<?> servicesToStop, IncludedBuildControllers includedBuildControllers, PublicBuildPath fromBuild) {
         this.gradle = gradle;
         this.initScriptHandler = initScriptHandler;
         this.settingsLoader = settingsLoader;
@@ -97,6 +100,7 @@ public class DefaultGradleLauncher implements GradleLauncher {
         this.buildServices = buildServices;
         this.servicesToStop = servicesToStop;
         this.includedBuildControllers = includedBuildControllers;
+        this.fromBuild = fromBuild;
     }
 
     @Override
@@ -254,6 +258,11 @@ public class DefaultGradleLauncher implements GradleLauncher {
                     public String getBuildPath() {
                         return gradle.getIdentityPath().toString();
                     }
+
+                    @Override
+                    public String getIncludedBy() {
+                        return fromBuild == null ? null : fromBuild.getBuildPath().toString();
+                    }
                 });
         }
     }
@@ -274,13 +283,19 @@ public class DefaultGradleLauncher implements GradleLauncher {
 
         @Override
         public BuildOperationDescriptor.Builder description() {
-            return BuildOperationDescriptor.displayName(gradle.contextualize("Configure build")).
-                details(new ConfigureBuildBuildOperationType.Details() {
-                    @Override
-                    public String getBuildPath() {
-                        return getGradle().getIdentityPath().toString();
-                    }
-                });
+            BuildOperationDescriptor.Builder builder = BuildOperationDescriptor.displayName(gradle.contextualize("Configure build"));
+            if (gradle.getParent() == null) {
+                builder.operationType(BuildOperationCategory.CONFIGURE_ROOT_BUILD);
+            } else {
+                builder.operationType(BuildOperationCategory.CONFIGURE_BUILD);
+            }
+            builder.totalProgress(settings.getProjectRegistry().size());
+            return builder.details(new ConfigureBuildBuildOperationType.Details() {
+                @Override
+                public String getBuildPath() {
+                    return getGradle().getIdentityPath().toString();
+                }
+            });
         }
     }
 
@@ -346,7 +361,14 @@ public class DefaultGradleLauncher implements GradleLauncher {
 
         @Override
         public BuildOperationDescriptor.Builder description() {
-            return BuildOperationDescriptor.displayName(gradle.contextualize("Run tasks"));
+            BuildOperationDescriptor.Builder builder = BuildOperationDescriptor.displayName(gradle.contextualize("Run tasks"));
+            if (gradle.getParent() == null) {
+                builder.operationType(BuildOperationCategory.RUN_TASKS_ROOT_BUILD);
+            } else {
+                builder.operationType(BuildOperationCategory.RUN_TASKS);
+            }
+            builder.totalProgress(gradle.getTaskGraph().size());
+            return builder;
         }
     }
 

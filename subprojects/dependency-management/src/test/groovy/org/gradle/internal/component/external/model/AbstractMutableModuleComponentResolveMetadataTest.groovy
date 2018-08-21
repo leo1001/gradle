@@ -20,11 +20,13 @@ import com.google.common.collect.ImmutableListMultimap
 import org.gradle.api.artifacts.VersionConstraint
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 import org.gradle.api.attributes.Attribute
+import org.gradle.api.internal.artifacts.DefaultModuleIdentifier
 import org.gradle.api.internal.artifacts.DefaultModuleVersionIdentifier
 import org.gradle.api.internal.artifacts.dependencies.DefaultMutableVersionConstraint
 import org.gradle.api.internal.attributes.ImmutableAttributes
 import org.gradle.api.internal.project.ProjectInternal
 import org.gradle.internal.component.external.descriptor.Configuration
+import org.gradle.internal.component.external.model.ivy.IvyDependencyDescriptor
 import org.gradle.internal.component.model.ComponentResolveMetadata
 import org.gradle.internal.component.model.DependencyMetadata
 import org.gradle.internal.hash.HashValue
@@ -35,7 +37,7 @@ import static org.gradle.internal.component.external.model.AbstractMutableModule
 import static org.gradle.internal.component.external.model.DefaultModuleComponentSelector.newSelector
 
 abstract class AbstractMutableModuleComponentResolveMetadataTest extends Specification {
-    def id = DefaultModuleComponentIdentifier.newId("group", "module", "version")
+    def id = DefaultModuleComponentIdentifier.newId(DefaultModuleIdentifier.newId("group", "module"), "version")
     def configurations = []
     def dependencies = []
 
@@ -52,7 +54,7 @@ abstract class AbstractMutableModuleComponentResolveMetadataTest extends Specifi
     }
 
     def "can replace identifiers"() {
-        def newId = DefaultModuleComponentIdentifier.newId("group", "module", "version")
+        def newId = DefaultModuleComponentIdentifier.newId(DefaultModuleIdentifier.newId("group", "module"), "version")
         def metadata = getMetadata()
 
         given:
@@ -83,7 +85,7 @@ abstract class AbstractMutableModuleComponentResolveMetadataTest extends Specifi
         !immutable.missing
         immutable.status == "integration"
         immutable.statusScheme == ComponentResolveMetadata.DEFAULT_STATUS_SCHEME
-        immutable.contentHash == EMPTY_CONTENT
+        immutable.originalContentHash == EMPTY_CONTENT
         immutable.getConfiguration("default")
         immutable.getConfiguration("default").artifacts.size() == 1
         immutable.getConfiguration("default").artifacts.first().name.name == id.module
@@ -109,7 +111,7 @@ abstract class AbstractMutableModuleComponentResolveMetadataTest extends Specifi
         immutable.changing
         immutable.missing
         immutable.status == "broken"
-        immutable.contentHash == contentHash
+        immutable.originalContentHash == contentHash
 
         def copy = immutable.asMutable()
         copy.changing
@@ -121,7 +123,7 @@ abstract class AbstractMutableModuleComponentResolveMetadataTest extends Specifi
         immutable2.changing
         immutable2.missing
         immutable2.status == "broken"
-        immutable2.contentHash == contentHash
+        immutable2.originalContentHash == contentHash
     }
 
     def "can changes to mutable metadata does not affect copies"() {
@@ -147,7 +149,7 @@ abstract class AbstractMutableModuleComponentResolveMetadataTest extends Specifi
         immutable.changing
         immutable.missing
         immutable.status == "broken"
-        immutable.contentHash == contentHash
+        immutable.originalContentHash == contentHash
 
         def copy = immutable.asMutable()
         copy.changing
@@ -157,7 +159,7 @@ abstract class AbstractMutableModuleComponentResolveMetadataTest extends Specifi
     }
 
     def "can attach variants with files"() {
-        def id = DefaultModuleComponentIdentifier.newId("group", "module", "version")
+        def id = DefaultModuleComponentIdentifier.newId(DefaultModuleIdentifier.newId("group", "module"), "version")
         def metadata = createMetadata(id)
 
         given:
@@ -227,7 +229,7 @@ abstract class AbstractMutableModuleComponentResolveMetadataTest extends Specifi
     }
 
     def "can attach variants with dependencies"() {
-        def id = DefaultModuleComponentIdentifier.newId("group", "module", "version")
+        def id = DefaultModuleComponentIdentifier.newId(DefaultModuleIdentifier.newId("group", "module"), "version")
         def metadata = createMetadata(id)
 
         given:
@@ -242,15 +244,15 @@ abstract class AbstractMutableModuleComponentResolveMetadataTest extends Specifi
         metadata.variants[0].dependencies.size() == 2
         metadata.variants[0].dependencies[0].group == "g1"
         metadata.variants[0].dependencies[0].module == "m1"
-        metadata.variants[0].dependencies[0].versionConstraint.preferredVersion == "v1"
+        metadata.variants[0].dependencies[0].versionConstraint.requiredVersion == "v1"
         metadata.variants[0].dependencies[1].group == "g2"
         metadata.variants[0].dependencies[1].module == "m2"
-        metadata.variants[0].dependencies[1].versionConstraint.preferredVersion == "v2"
+        metadata.variants[0].dependencies[1].versionConstraint.requiredVersion == "v2"
         metadata.variants[0].dependencies[1].reason == "v2 is tested"
         metadata.variants[1].dependencies.size() == 1
         metadata.variants[1].dependencies[0].group == "g1"
         metadata.variants[1].dependencies[0].module == "m1"
-        metadata.variants[1].dependencies[0].versionConstraint.preferredVersion == "v1"
+        metadata.variants[1].dependencies[0].versionConstraint.requiredVersion == "v1"
 
         def immutable = metadata.asImmutable()
         immutable.variants.size() == 2
@@ -274,7 +276,7 @@ abstract class AbstractMutableModuleComponentResolveMetadataTest extends Specifi
     }
 
     def "variants are attached as consumable configurations used for variant aware selection"() {
-        def id = DefaultModuleComponentIdentifier.newId("group", "module", "version")
+        def id = DefaultModuleComponentIdentifier.newId(DefaultModuleIdentifier.newId("group", "module"), "version")
         def metadata = createMetadata(id)
 
         def attributes1 = attributes(usage: "compile")
@@ -340,7 +342,7 @@ abstract class AbstractMutableModuleComponentResolveMetadataTest extends Specifi
     def dependency(String org, String module, String version, List<String> confs = []) {
         def builder = ImmutableListMultimap.builder()
         confs.each { builder.put(it, it) }
-        def dependency = new IvyDependencyDescriptor(newSelector(org, module, v(version)), builder.build())
+        def dependency = new IvyDependencyDescriptor(newSelector(DefaultModuleIdentifier.newId(org, module), v(version)), builder.build())
         dependencies.add(dependency)
         return dependency
     }

@@ -22,6 +22,10 @@ import org.gradle.util.AntUtil
 import org.gradle.util.Requires
 import org.gradle.util.TestPrecondition
 
+import static org.gradle.api.internal.artifacts.BaseRepositoryFactory.PLUGIN_PORTAL_OVERRIDE_URL_PROPERTY
+import static org.gradle.integtests.fixtures.RepoScriptBlockUtil.gradlePluginRepositoryMirrorUrl
+import static org.gradle.integtests.fixtures.RepoScriptBlockUtil.repoMirrorUrlsEnvironment
+
 class SrcDistributionIntegrationSpec extends DistributionIntegrationSpec {
 
     @Override
@@ -47,6 +51,8 @@ class SrcDistributionIntegrationSpec extends DistributionIntegrationSpec {
             inDirectory(contentsDir)
             usingExecutable('gradlew')
             withTasks('binZip')
+            withEnvironmentVars(repoMirrorUrlsEnvironment())
+            withArguments("-Djava9Home=${System.getProperty('java9Home')}", "-D${PLUGIN_PORTAL_OVERRIDE_URL_PROPERTY}=${gradlePluginRepositoryMirrorUrl()}")
             withWarningMode(null)
         }.run()
 

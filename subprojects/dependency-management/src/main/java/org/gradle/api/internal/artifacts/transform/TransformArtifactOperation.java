@@ -16,43 +16,62 @@
 
 package org.gradle.api.internal.artifacts.transform;
 
-import org.gradle.api.internal.artifacts.ivyservice.resolveengine.artifact.ResolvableArtifact;
+import org.gradle.api.artifacts.component.ComponentArtifactIdentifier;
+import org.gradle.internal.operations.BuildOperationCategory;
 import org.gradle.internal.operations.BuildOperationContext;
-import org.gradle.internal.operations.RunnableBuildOperation;
 import org.gradle.internal.operations.BuildOperationDescriptor;
+import org.gradle.internal.operations.RunnableBuildOperation;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import java.io.File;
 import java.util.List;
 
 class TransformArtifactOperation implements RunnableBuildOperation {
-    private final ResolvableArtifact artifact;
+    private static final Logger LOGGER = LoggerFactory.getLogger(TransformArtifactOperation.class);
+    private final ComponentArtifactIdentifier artifactId;
+    private final File file;
     private final ArtifactTransformer transform;
+    private final ArtifactTransformListener transformListener;
     private Throwable failure;
     private List<File> result;
 
-    TransformArtifactOperation(ResolvableArtifact artifact, ArtifactTransformer transform) {
-        this.artifact = artifact;
+    TransformArtifactOperation(ComponentArtifactIdentifier artifactId, File file, ArtifactTransformer transform, ArtifactTransformListener transformListener) {
+        this.artifactId = artifactId;
+        this.file = file;
         this.transform = transform;
+        this.transformListener = transformListener;
     }
 
     @Override
-    public void run(BuildOperationContext context) {
+    public void run(@Nullable BuildOperationContext context) {
+        transformListener.beforeTransform(transform, artifactId, file);
         try {
-            result = transform.transform(artifact.getFile());
+            if (LOGGER.isInfoEnabled()) {
+                LOGGER.info("Executing transform {} on artifact {}", transform.getDisplayName(), artifactId.getDisplayName());
+            }
+            result = transform.transform(file);
         } catch (Throwable t) {
             failure = t;
         }
+        transformListener.afterTransform(transform, artifactId, file, failure);
     }
 
     @Override
     public BuildOperationDescriptor.Builder description() {
-        return BuildOperationDescriptor.displayName("Apply " + transform.getDisplayName() + " to " + artifact);
+        String displayName = "Transform " + artifactId.getDisplayName() + " with " + transform.getDisplayName();
+        return BuildOperationDescriptor.displayName(displayName)
+            .progressDisplayName(displayName)
+            .operationType(BuildOperationCategory.UNCATEGORIZED);
     }
 
+    @Nullable
     public Throwable getFailure() {
         return failure;
     }
 
+    @Nullable
     public List<File> getResult() {
         return result;
     }

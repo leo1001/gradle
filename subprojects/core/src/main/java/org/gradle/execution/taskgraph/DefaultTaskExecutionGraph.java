@@ -28,20 +28,13 @@ import org.gradle.api.execution.TaskExecutionGraph;
 import org.gradle.api.execution.TaskExecutionGraphListener;
 import org.gradle.api.execution.TaskExecutionListener;
 import org.gradle.api.internal.GradleInternal;
-import org.gradle.api.internal.TaskInternal;
-import org.gradle.api.internal.tasks.TaskExecuter;
-import org.gradle.api.internal.tasks.TaskExecutionContext;
-import org.gradle.api.internal.tasks.TaskStateInternal;
-import org.gradle.api.internal.tasks.execution.DefaultTaskExecutionContext;
 import org.gradle.api.specs.Spec;
 import org.gradle.api.specs.Specs;
 import org.gradle.api.tasks.TaskState;
-import org.gradle.composite.internal.IncludedBuildTaskGraph;
+import org.gradle.configuration.internal.ListenerBuildOperationDecorator;
 import org.gradle.execution.TaskExecutionGraphInternal;
 import org.gradle.internal.Cast;
-import org.gradle.internal.Factory;
 import org.gradle.internal.event.ListenerBroadcast;
-import org.gradle.internal.event.ListenerManager;
 import org.gradle.internal.operations.BuildOperationContext;
 import org.gradle.internal.operations.BuildOperationDescriptor;
 import org.gradle.internal.operations.BuildOperationExecutor;
@@ -72,29 +65,40 @@ public class DefaultTaskExecutionGraph implements TaskExecutionGraphInternal {
 
     private final TaskPlanExecutor taskPlanExecutor;
     private final ResourceLockCoordinationService coordinationService;
-    // This currently needs to be lazy, as it uses state that is not available when the graph is created
-    private final Factory<? extends TaskExecuter> taskExecuter;
+    private final List<WorkInfoExecutor> workInfoExecutors;
     private final GradleInternal gradleInternal;
     private final ListenerBroadcast<TaskExecutionGraphListener> graphListeners;
     private final ListenerBroadcast<TaskExecutionListener> taskListeners;
     private final DefaultTaskExecutionPlan taskExecutionPlan;
     private final BuildOperationExecutor buildOperationExecutor;
+    private final ListenerBuildOperationDecorator listenerBuildOperationDecorator;
     private TaskGraphState taskGraphState = TaskGraphState.EMPTY;
     private List<Task> allTasks;
 
     private final Set<Task> requestedTasks = Sets.newTreeSet();
-    private Spec<? super Task> filter = Specs.SATISFIES_ALL;
 
-    public DefaultTaskExecutionGraph(ListenerManager listenerManager, TaskPlanExecutor taskPlanExecutor, Factory<? extends TaskExecuter> taskExecuter, BuildOperationExecutor buildOperationExecutor, WorkerLeaseService workerLeaseService, ResourceLockCoordinationService coordinationService, GradleInternal gradleInternal, IncludedBuildTaskGraph includedBuildTaskGraph) {
+    public DefaultTaskExecutionGraph(
+        TaskPlanExecutor taskPlanExecutor,
+        List<WorkInfoExecutor> workInfoExecutors,
+        BuildOperationExecutor buildOperationExecutor,
+        ListenerBuildOperationDecorator listenerBuildOperationDecorator,
+        WorkerLeaseService workerLeaseService,
+        ResourceLockCoordinationService coordinationService,
+        GradleInternal gradleInternal,
+        TaskInfoFactory taskInfoFactory,
+        TaskDependencyResolver dependencyResolver,
+        ListenerBroadcast<TaskExecutionGraphListener> graphListeners,
+        ListenerBroadcast<TaskExecutionListener> taskListeners
+    ) {
         this.taskPlanExecutor = taskPlanExecutor;
-        this.taskExecuter = taskExecuter;
+        this.workInfoExecutors = workInfoExecutors;
         this.buildOperationExecutor = buildOperationExecutor;
+        this.listenerBuildOperationDecorator = listenerBuildOperationDecorator;
         this.coordinationService = coordinationService;
         this.gradleInternal = gradleInternal;
-        graphListeners = listenerManager.createAnonymousBroadcaster(TaskExecutionGraphListener.class);
-        taskListeners = listenerManager.createAnonymousBroadcaster(TaskExecutionListener.class);
-        taskExecutionPlan = new DefaultTaskExecutionPlan(workerLeaseService, gradleInternal, includedBuildTaskGraph);
-
+        this.graphListeners = graphListeners;
+        this.taskListeners = taskListeners;
+        this.taskExecutionPlan = new DefaultTaskExecutionPlan(workerLeaseService, gradleInternal, taskInfoFactory, dependencyResolver);
     }
 
     @Override
@@ -102,12 +106,14 @@ public class DefaultTaskExecutionGraph implements TaskExecutionGraphInternal {
         taskExecutionPlan.setContinueOnFailure(continueOnFailure);
     }
 
+    @Override
     public void useFilter(Spec<? super Task> filter) {
-        this.filter = Cast.uncheckedCast(filter != null ? filter : Specs.SATISFIES_ALL);
-        taskExecutionPlan.useFilter(this.filter);
+        Spec<? super Task> castFilter = Cast.uncheckedCast(filter != null ? filter : Specs.SATISFIES_ALL);
+        taskExecutionPlan.useFilter(castFilter);
         taskGraphState = TaskGraphState.DIRTY;
     }
 
+    @Override
     public void addTasks(Iterable<? extends Task> tasks) {
         assert tasks != null;
 
@@ -131,12 +137,12 @@ public class DefaultTaskExecutionGraph implements TaskExecutionGraphInternal {
     }
 
     @Override
-    public void execute(Collection<? super Throwable> taskFailures) {
+    public void execute(Collection<? super Throwable> failures) {
         Timer clock = Time.startTimer();
         ensurePopulated();
-        buildOperationExecutor.run(new NotifyTaskGraphWhenReady(this, graphListeners, gradleInternal));
+        buildOperationExecutor.run(new NotifyTaskGraphWhenReady(this, graphListeners.getSource(), gradleInternal));
         try {
-            taskPlanExecutor.process(taskExecutionPlan, new ExecuteTaskAction(taskExecuter.create(), buildOperationExecutor.getCurrentOperation()), taskFailures);
+            taskPlanExecutor.process(taskExecutionPlan, failures, new BuildOperationAwareWorkItemExecutor(workInfoExecutors, buildOperationExecutor.getCurrentOperation()));
             LOGGER.debug("Timing: Executing the DAG took " + clock.getElapsed());
         } finally {
             coordinationService.withStateLock(new Transformer<ResourceLockState.Disposition, ResourceLockState>() {
@@ -149,39 +155,47 @@ public class DefaultTaskExecutionGraph implements TaskExecutionGraphInternal {
         }
     }
 
+    @Override
     public void addTaskExecutionGraphListener(TaskExecutionGraphListener listener) {
-        graphListeners.add(listener);
+        graphListeners.add(listenerBuildOperationDecorator.decorate("TaskExecutionGraph.addTaskExecutionGraphListener", TaskExecutionGraphListener.class, listener));
     }
 
+    @Override
     public void removeTaskExecutionGraphListener(TaskExecutionGraphListener listener) {
         graphListeners.remove(listener);
     }
 
+    @Override
     public void whenReady(final Closure closure) {
-        graphListeners.add(new ClosureBackedMethodInvocationDispatch("graphPopulated", closure));
+        graphListeners.add(new ClosureBackedMethodInvocationDispatch("graphPopulated", listenerBuildOperationDecorator.decorate("TaskExecutionGraph.whenReady", closure)));
     }
 
+    @Override
     public void whenReady(final Action<TaskExecutionGraph> action) {
-        graphListeners.add(new TaskExecutionGraphListener() {
+        graphListeners.add(listenerBuildOperationDecorator.decorate("TaskExecutionGraph.whenReady", TaskExecutionGraphListener.class, new TaskExecutionGraphListener() {
             @Override
             public void graphPopulated(TaskExecutionGraph graph) {
                 action.execute(graph);
             }
-        });
+        }));
     }
 
+    @Override
     public void addTaskExecutionListener(TaskExecutionListener listener) {
         taskListeners.add(listener);
     }
 
+    @Override
     public void removeTaskExecutionListener(TaskExecutionListener listener) {
         taskListeners.remove(listener);
     }
 
+    @Override
     public void beforeTask(final Closure closure) {
         taskListeners.add(new ClosureBackedMethodInvocationDispatch("beforeExecute", closure));
     }
 
+    @Override
     public void beforeTask(final Action<Task> action) {
         taskListeners.add(new TaskExecutionAdapter() {
             @Override
@@ -191,10 +205,12 @@ public class DefaultTaskExecutionGraph implements TaskExecutionGraphInternal {
         });
     }
 
+    @Override
     public void afterTask(final Closure closure) {
         taskListeners.add(new ClosureBackedMethodInvocationDispatch("afterExecute", closure));
     }
 
+    @Override
     public void afterTask(final Action<Task> action) {
         taskListeners.add(new TaskExecutionAdapter() {
             @Override
@@ -204,14 +220,15 @@ public class DefaultTaskExecutionGraph implements TaskExecutionGraphInternal {
         });
     }
 
+    @Override
     public boolean hasTask(Task task) {
         ensurePopulated();
         return taskExecutionPlan.getTasks().contains(task);
     }
 
+    @Override
     public boolean hasTask(String path) {
         ensurePopulated();
-        assert path != null && path.length() > 0;
         for (Task task : taskExecutionPlan.getTasks()) {
             if (task.getPath().equals(path)) {
                 return true;
@@ -220,6 +237,12 @@ public class DefaultTaskExecutionGraph implements TaskExecutionGraphInternal {
         return false;
     }
 
+    @Override
+    public int size() {
+        return taskExecutionPlan.size();
+    }
+
+    @Override
     public List<Task> getAllTasks() {
         ensurePopulated();
         if (allTasks == null) {
@@ -251,33 +274,38 @@ public class DefaultTaskExecutionGraph implements TaskExecutionGraphInternal {
     /**
      * This action executes a task via the task executer wrapping everything into a build operation.
      */
-    private class ExecuteTaskAction implements Action<TaskInternal> {
-        private final TaskExecuter taskExecuter;
+    private class BuildOperationAwareWorkItemExecutor implements Action<WorkInfo> {
         private final BuildOperationRef parentOperation;
+        private final List<WorkInfoExecutor> workInfoExecutors;
 
-        ExecuteTaskAction(TaskExecuter taskExecuter, BuildOperationRef parentOperation) {
-            this.taskExecuter = taskExecuter;
+        BuildOperationAwareWorkItemExecutor(List<WorkInfoExecutor> workInfoExecutors, BuildOperationRef parentOperation) {
+            this.workInfoExecutors = workInfoExecutors;
             this.parentOperation = parentOperation;
         }
 
         @Override
-        public void execute(final TaskInternal task) {
+        public void execute(WorkInfo work) {
             BuildOperationRef previous = CurrentBuildOperationRef.instance().get();
             CurrentBuildOperationRef.instance().set(parentOperation);
             try {
-                TaskStateInternal state = task.getState();
-                TaskExecutionContext ctx = new DefaultTaskExecutionContext();
-                taskExecuter.execute(task, state, ctx);
+                for (WorkInfoExecutor workInfoExecutor : workInfoExecutors) {
+                    if (workInfoExecutor.execute(work)) {
+                        return;
+                    }
+                }
+                throw new IllegalStateException("Unknown type of work: " + work);
             } finally {
                 CurrentBuildOperationRef.instance().set(previous);
             }
         }
     }
 
+    @Override
     public Set<Task> getRequestedTasks() {
         return requestedTasks;
     }
 
+    @Override
     public Set<Task> getFilteredTasks() {
         /*
             Note: we currently extract this information from the execution plan because it's
@@ -290,26 +318,21 @@ public class DefaultTaskExecutionGraph implements TaskExecutionGraphInternal {
         return taskExecutionPlan.getFilteredTasks();
     }
 
-    @Override
-    public TaskExecutionListener getTaskExecutionListenerSource() {
-        return taskListeners.getSource();
-    }
-
     private static class NotifyTaskGraphWhenReady implements RunnableBuildOperation {
 
         private final TaskExecutionGraph taskExecutionGraph;
-        private final ListenerBroadcast<TaskExecutionGraphListener> graphListeners;
+        private final TaskExecutionGraphListener graphListener;
         private final GradleInternal gradleInternal;
 
-        private NotifyTaskGraphWhenReady(TaskExecutionGraph taskExecutionGraph, ListenerBroadcast<TaskExecutionGraphListener> graphListeners, GradleInternal gradleInternal) {
+        private NotifyTaskGraphWhenReady(TaskExecutionGraph taskExecutionGraph, TaskExecutionGraphListener graphListener, GradleInternal gradleInternal) {
             this.taskExecutionGraph = taskExecutionGraph;
-            this.graphListeners = graphListeners;
+            this.graphListener = graphListener;
             this.gradleInternal = gradleInternal;
         }
 
         @Override
         public void run(BuildOperationContext context) {
-            graphListeners.getSource().graphPopulated(taskExecutionGraph);
+            graphListener.graphPopulated(taskExecutionGraph);
             context.setResult(NotifyTaskGraphWhenReadyBuildOperationType.RESULT);
         }
 

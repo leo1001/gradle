@@ -55,7 +55,7 @@ import static org.gradle.api.internal.artifacts.ivyservice.resolveengine.result.
  * In this case {@link #resolved} will be `true` and {@link ModuleResolveState#selected} will point to the selected component.
  */
 class SelectorState implements DependencyGraphSelector, ResolvableSelectorState {
-    public static final Transformer<ComponentSelectionDescriptorInternal, ComponentSelectionDescriptorInternal> IDENTITY = new Transformer<ComponentSelectionDescriptorInternal, ComponentSelectionDescriptorInternal>() {
+    private static final Transformer<ComponentSelectionDescriptorInternal, ComponentSelectionDescriptorInternal> IDENTITY = new Transformer<ComponentSelectionDescriptorInternal, ComponentSelectionDescriptorInternal>() {
         @Override
         public ComponentSelectionDescriptorInternal transform(ComponentSelectionDescriptorInternal componentSelectionDescriptorInternal) {
             return componentSelectionDescriptorInternal;
@@ -65,7 +65,7 @@ class SelectorState implements DependencyGraphSelector, ResolvableSelectorState 
     private final DependencyState dependencyState;
     private final DependencyMetadata firstSeenDependency;
     private final DependencyToComponentIdResolver resolver;
-    private final ResolvedVersionConstraint versionConstraint;
+    private final DefaultResolvedVersionConstraint versionConstraint;
     private final VersionSelectorScheme versionSelectorScheme;
     private final ImmutableAttributesFactory attributesFactory;
     private final Set<ComponentSelectionDescriptorInternal> dependencyReasons = Sets.newLinkedHashSet();
@@ -75,6 +75,14 @@ class SelectorState implements DependencyGraphSelector, ResolvableSelectorState 
     private ModuleResolveState targetModule;
     private boolean resolved;
     private boolean forced;
+
+    // An internal counter used to track the number of outgoing edges
+    // that use this selector. Since a module resolve state tracks all selectors
+    // for this module, when considering selectors that need to be used when
+    // choosing a version, we must only consider the ones which currently have
+    // outgoing edges pointing to them. If not, then it means the module was
+    // evicted, but it can still be reintegrated later in a different path.
+    private int outgoingEdgeCount;
 
     SelectorState(Long id, DependencyState dependencyState, DependencyToComponentIdResolver resolver, VersionSelectorScheme versionSelectorScheme, ResolveState resolveState, ModuleIdentifier targetModuleId) {
         this.id = id;
@@ -86,8 +94,22 @@ class SelectorState implements DependencyGraphSelector, ResolvableSelectorState 
         this.versionConstraint = resolveVersionConstraint(firstSeenDependency.getSelector());
         this.attributesFactory = resolveState.getAttributesFactory();
         this.forced = isForced(firstSeenDependency);
-        targetModule.addSelector(this);
         addDependencyMetadata(firstSeenDependency);
+    }
+
+    public void use() {
+        outgoingEdgeCount++;
+        if (outgoingEdgeCount == 1) {
+            targetModule.addSelector(this);
+        }
+    }
+
+    public void release() {
+        outgoingEdgeCount--;
+        assert outgoingEdgeCount >= 0 : "Inconsistent selector state detected: outgoing edge count cannot be negative";
+        if (outgoingEdgeCount == 0) {
+            targetModule.removeSelector(this);
+        }
     }
 
     private void addDependencyMetadata(DependencyMetadata dependencyMetadata) {
@@ -99,7 +121,7 @@ class SelectorState implements DependencyGraphSelector, ResolvableSelectorState 
         dependencyReasons.add(dependencyDescriptor);
     }
 
-    private ResolvedVersionConstraint resolveVersionConstraint(ComponentSelector selector) {
+    private DefaultResolvedVersionConstraint resolveVersionConstraint(ComponentSelector selector) {
         if (selector instanceof ModuleComponentSelector) {
             return new DefaultResolvedVersionConstraint(((ModuleComponentSelector) selector).getVersionConstraint(), versionSelectorScheme);
         }
@@ -144,7 +166,7 @@ class SelectorState implements DependencyGraphSelector, ResolvableSelectorState 
         if (dependencyState.failure != null) {
             idResolveResult.failed(dependencyState.failure);
         } else {
-            ResolvedVersionConstraint mergedConstraint = versionConstraint == null ? null : new DefaultResolvedVersionConstraint(versionConstraint.getPreferredSelector(), allRejects);
+            ResolvedVersionConstraint mergedConstraint = versionConstraint == null ? null : versionConstraint.withRejectSelector(allRejects);
             resolver.resolve(firstSeenDependency, mergedConstraint, idResolveResult);
         }
 
@@ -226,6 +248,11 @@ class SelectorState implements DependencyGraphSelector, ResolvableSelectorState 
 
     public ResolvedVersionConstraint getVersionConstraint() {
         return versionConstraint;
+    }
+
+    @Override
+    public ComponentSelector getSelector() {
+        return dependencyState.getDependency().getSelector();
     }
 
     @Override

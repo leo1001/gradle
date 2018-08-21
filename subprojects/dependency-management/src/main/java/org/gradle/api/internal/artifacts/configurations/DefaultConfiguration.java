@@ -107,7 +107,6 @@ import org.gradle.util.CollectionUtils;
 import org.gradle.util.Path;
 import org.gradle.util.WrapUtil;
 
-import javax.annotation.Nullable;
 import java.io.File;
 import java.util.Collection;
 import java.util.Collections;
@@ -180,7 +179,8 @@ public class DefaultConfiguration extends AbstractFileCollection implements Conf
     private boolean transitive = true;
     private Set<Configuration> extendsFrom = new LinkedHashSet<Configuration>();
     private String description;
-    private Set<ExcludeRule> excludeRules = new LinkedHashSet<ExcludeRule>();
+    private final Set<Object> excludeRules = new LinkedHashSet<Object>();
+    private Set<ExcludeRule> parsedExcludeRules;
 
     private final Object observationLock = new Object();
     private InternalState observedState = UNRESOLVED;
@@ -527,7 +527,7 @@ public class DefaultConfiguration extends AbstractFileCollection implements Conf
                 runDependencyActions();
                 preventFromFurtherMutation();
 
-                final ResolvableDependencies incoming = getIncoming();
+                final ResolvableDependenciesInternal incoming = (ResolvableDependenciesInternal) getIncoming();
                 performPreResolveActions(incoming);
                 cachedResolverResults = new DefaultResolverResults();
                 resolver.resolveGraph(DefaultConfiguration.this, cachedResolverResults);
@@ -538,23 +538,39 @@ public class DefaultConfiguration extends AbstractFileCollection implements Conf
                 markParentsObserved(requestedState);
                 markReferencedProjectConfigurationsObserved(requestedState);
 
-                dependencyResolutionListeners.getSource().afterResolve(incoming);
-                // Discard listeners
-                dependencyResolutionListeners.removeAll();
-                context.setResult(new ResolveConfigurationDependenciesBuildOperationType.Result() {
-                    @Override
-                    public ResolvedComponentResult getRootComponent() {
-                        return incoming.getResolutionResult().getRoot();
-                    }
-                });
+                if (!cachedResolverResults.hasError()) {
+                    dependencyResolutionListeners.getSource().afterResolve(incoming);
+                    // Discard listeners
+                    dependencyResolutionListeners.removeAll();
+                }
+                captureBuildOperationResult(context, incoming);
+            }
+
+            private void captureBuildOperationResult(BuildOperationContext context, final ResolvableDependenciesInternal incoming) {
+                Throwable failure = cachedResolverResults.getFailure();
+                if (failure != null) {
+                    context.failed(failure);
+                }
+                context.setResult(new ResolveConfigurationResolutionBuildOperationResult(incoming, failure != null));
             }
 
             @Override
             public BuildOperationDescriptor.Builder description() {
                 String displayName = "Resolve dependencies of " + identityPath;
+                Path projectPath = domainObjectContext.getProjectPath();
+                String projectPathString = domainObjectContext.isScript() ? null : (projectPath == null ? null : projectPath.getPath());
                 return BuildOperationDescriptor.displayName(displayName)
                     .progressDisplayName(displayName)
-                    .details(new OperationDetails());
+                    .details(new ResolveConfigurationResolutionBuildOperationDetails(
+                        getName(),
+                        domainObjectContext.isScript(),
+                        getDescription(),
+                        domainObjectContext.getBuildPath().getPath(),
+                        projectPathString,
+                        isVisible(),
+                        isTransitive(),
+                        resolver.getRepositories()
+                    ));
             }
         });
     }
@@ -671,17 +687,34 @@ public class DefaultConfiguration extends AbstractFileCollection implements Conf
     }
 
     public Set<ExcludeRule> getExcludeRules() {
-        return Collections.unmodifiableSet(excludeRules);
+        initExcludeRules();
+        return Collections.unmodifiableSet(parsedExcludeRules);
+    }
+
+    /**
+     * Synchronize read access to excludes. Mutation does not need to be thread-safe.
+     */
+    private synchronized void initExcludeRules() {
+        if (parsedExcludeRules == null) {
+            NotationParser<Object, ExcludeRule> parser = ExcludeRuleNotationConverter.parser();
+            parsedExcludeRules = Sets.newLinkedHashSet();
+            for (Object excludeRule : excludeRules) {
+                parsedExcludeRules.add(parser.parseNotation(excludeRule));
+            }
+        }
     }
 
     public void setExcludeRules(Set<ExcludeRule> excludeRules) {
         validateMutation(MutationType.DEPENDENCIES);
-        this.excludeRules = excludeRules;
+        parsedExcludeRules = null;
+        this.excludeRules.clear();
+        this.excludeRules.addAll(excludeRules);
     }
 
     public DefaultConfiguration exclude(Map<String, String> excludeRuleArgs) {
         validateMutation(MutationType.DEPENDENCIES);
-        excludeRules.add(ExcludeRuleNotationConverter.parser().parseNotation(excludeRuleArgs));
+        parsedExcludeRules = null;
+        excludeRules.add(excludeRuleArgs);
         return this;
     }
 
@@ -1506,50 +1539,6 @@ public class DefaultConfiguration extends AbstractFileCollection implements Conf
                     rethrowFailure("task dependencies", failures);
                 }
             }
-        }
-    }
-
-    private class OperationDetails implements ResolveConfigurationDependenciesBuildOperationType.Details {
-
-        @Override
-        public String getConfigurationName() {
-            return getName();
-        }
-
-        @Nullable
-        @Override
-        public String getProjectPath() {
-            if (isScriptConfiguration()) {
-                return null;
-            } else {
-                Path projectPath = domainObjectContext.getProjectPath();
-                return projectPath == null ? null : projectPath.getPath();
-            }
-        }
-
-        @Override
-        public boolean isScriptConfiguration() {
-            return domainObjectContext.isScript();
-        }
-
-        @Override
-        public String getConfigurationDescription() {
-            return getDescription();
-        }
-
-        @Override
-        public String getBuildPath() {
-            return domainObjectContext.getBuildPath().getPath();
-        }
-
-        @Override
-        public boolean isConfigurationVisible() {
-            return isVisible();
-        }
-
-        @Override
-        public boolean isConfigurationTransitive() {
-            return isTransitive();
         }
     }
 

@@ -25,9 +25,7 @@ import org.gradle.gradlebuild.ProjectGroups.pluginProjects
 import org.gradle.gradlebuild.ProjectGroups.publishedProjects
 
 buildscript {
-    project.apply {
-        from("$rootDir/gradle/shared-with-buildSrc/mirrors.gradle.kts")
-    }
+    project.apply(from = "$rootDir/gradle/shared-with-buildSrc/mirrors.gradle.kts")
 }
 
 plugins {
@@ -136,13 +134,17 @@ buildTypes {
     }
 }
 
+var kotlinDevMirrorUrl = (project.rootProject.extensions.extraProperties.get("repositoryMirrors") as Map<String, String>).get("kotlindev")
+
 allprojects {
     group = "org.gradle"
 
     repositories {
         maven(url = "https://repo.gradle.org/gradle/libs-releases")
+        maven(url = "https://repo.gradle.org/gradle/libs")
         maven(url = "https://repo.gradle.org/gradle/libs-milestones")
         maven(url = "https://repo.gradle.org/gradle/libs-snapshots")
+        maven(url = kotlinDevMirrorUrl ?: "https://dl.bintray.com/kotlin/kotlin-dev")
     }
 
     // patchExternalModules lives in the root project - we need to activate normalization there, too.
@@ -264,11 +266,13 @@ dependencies {
     coreRuntimeExtensions(project(":pluginUse"))
     coreRuntimeExtensions(project(":workers"))
     coreRuntimeExtensions(patchedExternalModules)
+
+    testRuntime(project(":apiMetadata"))
 }
 
 extra["allCoreRuntimeExtensions"] = coreRuntimeExtensions.allDependencies
 
-task<PatchExternalModules>("patchExternalModules") {
+tasks.register<PatchExternalModules>("patchExternalModules") {
     allModules = externalModulesRuntime
     coreModules = coreRuntime
     modulesToPatch = this@Build_gradle.externalModules
@@ -277,16 +281,16 @@ task<PatchExternalModules>("patchExternalModules") {
 
 evaluationDependsOn(":distributions")
 
-val gradle_installPath: Any? by project
+val gradle_installPath: Any? = findProperty("gradle_installPath")
 
-task<Install>("install") {
+tasks.register<Install>("install") {
     description = "Installs the minimal distribution into directory $gradle_installPath"
     group = "build"
     with(distributionImage("binDistImage"))
     installDirPropertyName = ::gradle_installPath.name
 }
 
-task<Install>("installAll") {
+tasks.register<Install>("installAll") {
     description = "Installs the full distribution into directory $gradle_installPath"
     group = "build"
     with(distributionImage("allDistImage"))
@@ -296,11 +300,18 @@ task<Install>("installAll") {
 fun distributionImage(named: String) =
     project(":distributions").property(named) as CopySpec
 
-afterEvaluate {
-    if (gradle.startParameter.isBuildCacheEnabled) {
-        rootProject
-            .availableJavaInstallations
-            .validateBuildCacheConfiguration(buildCacheConfiguration())
+val validateBuildCacheConfiguration = tasks.register("validateBuildCacheConfiguration") {
+    enabled = gradle.startParameter.isBuildCacheEnabled
+    doLast {
+        if (rootProject.buildCacheConfiguration().remote?.isEnabled == true) {
+            rootProject.availableJavaInstallations.validateForRemoteBuildCacheUsage()
+        }
+    }
+}
+
+subprojects {
+    tasks.withType<AbstractCompile>().configureEach {
+        dependsOn(validateBuildCacheConfiguration)
     }
 }
 

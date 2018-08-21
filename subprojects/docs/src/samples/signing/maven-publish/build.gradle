@@ -1,30 +1,33 @@
-apply plugin: 'java-library'
-apply plugin: 'maven-publish'
-apply plugin: 'signing'
+// tag::all[]
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+    id 'signing'
+}
 
 group = 'com.example'
 version = '1.0'
 
 task sourcesJar(type: Jar) {
     from sourceSets.main.allJava
-    classifier 'sources'
+    classifier = 'sources'
 }
 
 task javadocJar(type: Jar) {
     from javadoc
-    classifier 'javadoc'
+    classifier = 'javadoc'
 }
 
-// START SNIPPET pom-customization
+// tag::pom-customization[]
 publishing {
     publications {
         mavenJava(MavenPublication) {
-// END SNIPPET pom-customization
-            artifactId 'my-library'
+// end::pom-customization[]
+            artifactId = 'my-library'
             from components.java
             artifact sourcesJar
             artifact javadocJar
-// START SNIPPET pom-customization
+// tag::pom-customization[]
             pom {
                 name = 'My Library'
                 description = 'A concise description of my library'
@@ -50,24 +53,24 @@ publishing {
             }
         }
     }
-// END SNIPPET pom-customization
+// end::pom-customization[]
     repositories {
         maven {
             // change URLs to point to your repos, e.g. http://my.org/repo
             def releasesRepoUrl = "$buildDir/repos/releases"
             def snapshotsRepoUrl = "$buildDir/repos/snapshots"
-            url version.endsWith('SNAPSHOT') ? snapshotsRepoUrl : releasesRepoUrl
+            url = version.endsWith('SNAPSHOT') ? snapshotsRepoUrl : releasesRepoUrl
         }
     }
-// START SNIPPET pom-customization
+// tag::pom-customization[]
 }
-// END SNIPPET pom-customization
+// end::pom-customization[]
 
-// START SNIPPET sign-publication
+// tag::sign-publication[]
 signing {
     sign publishing.publications.mavenJava
 }
-// END SNIPPET sign-publication
+// end::sign-publication[]
 
 
 javadoc {
@@ -75,3 +78,4 @@ javadoc {
         options.addBooleanOption('html4', true)
     }
 }
+// end::all[]

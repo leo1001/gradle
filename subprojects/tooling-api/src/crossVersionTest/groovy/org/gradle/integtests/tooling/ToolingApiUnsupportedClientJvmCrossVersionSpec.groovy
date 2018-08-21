@@ -23,7 +23,9 @@ import org.gradle.integtests.tooling.fixture.ToolingApiSpecification
 import org.gradle.integtests.tooling.fixture.ToolingApiVersion
 import org.gradle.util.GradleVersion
 import org.gradle.util.Requires
+import org.gradle.util.TestPrecondition
 
+@Requires(TestPrecondition.JDK8_OR_EARLIER)
 class ToolingApiUnsupportedClientJvmCrossVersionSpec extends ToolingApiSpecification {
     def setup() {
         settingsFile << "rootProject.name = 'test'"
@@ -71,7 +73,7 @@ public class TestClient {
         targetDist.executer(temporaryFolder, getBuildContext()).inDirectory(projectDir).withTasks("installDist").requireGradleDistribution().run()
     }
 
-    @Requires(adhoc = { AvailableJavaHomes.getJdks("1.5", "1.6") })
+    @Requires(adhoc = { AvailableJavaHomes.getJdks("1.6") })
     @TargetGradleVersion("current")
     @ToolingApiVersion("current")
     def "cannot use tooling API from Java 6 or earlier"() {
@@ -82,7 +84,7 @@ public class TestClient {
         out.contains("Gradle Tooling API ${targetDist.version.version} requires Java 7 or later to run. You are currently using Java ${jdk.javaVersion.majorVersion}.")
 
         where:
-        jdk << AvailableJavaHomes.getJdks("1.5", "1.6")
+        jdk << AvailableJavaHomes.getJdks("1.6")
     }
 
     def runScript(def jdk) {

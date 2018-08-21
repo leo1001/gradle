@@ -1,23 +1,18 @@
 package org.gradle.gradlebuild.test.integrationtests
 
+import org.gradle.api.Action
+import org.gradle.api.Project
+import org.gradle.api.tasks.SourceSet
+import org.gradle.api.tasks.TaskProvider
+
+import org.gradle.kotlin.dsl.*
+
 import accessors.eclipse
 import accessors.groovy
 import accessors.idea
 import accessors.java
-import org.gradle.api.Action
-import org.gradle.api.JavaVersion
-import org.gradle.api.Project
-import org.gradle.api.tasks.SourceSet
-import org.gradle.api.tasks.TaskProvider
+
 import org.gradle.gradlebuild.java.AvailableJavaInstallations
-import org.gradle.kotlin.dsl.dependencies
-import org.gradle.kotlin.dsl.get
-import org.gradle.kotlin.dsl.getting
-import org.gradle.kotlin.dsl.invoke
-import org.gradle.kotlin.dsl.project
-import org.gradle.kotlin.dsl.the
-import org.gradle.kotlin.dsl.withType
-import org.gradle.kotlin.dsl.getValue
 import org.gradle.plugins.ide.eclipse.EclipsePlugin
 import org.gradle.plugins.ide.idea.IdeaPlugin
 
@@ -81,7 +76,6 @@ fun Project.createTasks(sourceSet: SourceSet, testType: TestType) {
 internal
 fun Project.createTestTask(name: String, executer: String, sourceSet: SourceSet, testType: TestType, extraConfig: Action<IntegrationTest>): TaskProvider<IntegrationTest> {
     return tasks.register(name, IntegrationTest::class.java) {
-        addBaseConfigurationForIntegrationAndCrossVersionTestTasks(currentTestJavaVersion)
         description = "Runs ${testType.prefix} with $executer executer"
         systemProperties["org.gradle.integtest.executer"] = executer
         addDebugProperties()
@@ -90,13 +84,6 @@ fun Project.createTestTask(name: String, executer: String, sourceSet: SourceSet,
         libsRepository.required = testType.libRepoRequired
         extraConfig.execute(this)
     }
-}
-
-
-private
-fun IntegrationTest.addBaseConfigurationForIntegrationAndCrossVersionTestTasks(currentTestJavaVersion: JavaVersion) {
-    group = "verification"
-    exclude(testExcluder.excludesForJavaVersion(currentTestJavaVersion))
 }
 
 
@@ -150,30 +137,5 @@ fun Project.configureIde(testType: TestType) {
 
 
 internal
-val testExcluder = TestExcluder(excludedTests)
-
-
-internal
 val Project.currentTestJavaVersion
     get() = rootProject.the<AvailableJavaInstallations>().javaInstallationForTest.javaVersion
-
-
-internal
-class TestExcluder(excludeInputs: List<Pair<String, List<JavaVersion>>>) {
-    val excludeRules = exclude(excludeInputs)
-
-    private
-    fun exclude(pairs: List<Pair<String, List<JavaVersion>>>): Map<JavaVersion, Set<String>> {
-        val excludes = mutableMapOf<JavaVersion, MutableSet<String>>()
-        pairs.forEach { nameVersionPair ->
-            nameVersionPair.second.forEach {
-                val excludesForVersion = excludes.get(it) ?: mutableSetOf()
-                excludesForVersion.add("**/*${nameVersionPair.first}*")
-                excludes.put(it, excludesForVersion)
-            }
-        }
-        return excludes
-    }
-
-    fun excludesForJavaVersion(version: JavaVersion) = excludeRules[version] ?: emptySet()
-}

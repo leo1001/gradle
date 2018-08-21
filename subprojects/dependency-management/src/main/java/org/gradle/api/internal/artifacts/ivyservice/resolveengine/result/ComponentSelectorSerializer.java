@@ -23,6 +23,7 @@ import org.gradle.api.artifacts.component.ComponentSelector;
 import org.gradle.api.artifacts.component.LibraryComponentSelector;
 import org.gradle.api.artifacts.component.ModuleComponentSelector;
 import org.gradle.api.attributes.AttributeContainer;
+import org.gradle.api.internal.artifacts.DefaultModuleIdentifier;
 import org.gradle.api.internal.artifacts.ImmutableVersionConstraint;
 import org.gradle.api.internal.artifacts.dependencies.DefaultImmutableVersionConstraint;
 import org.gradle.api.internal.attributes.ImmutableAttributes;
@@ -67,7 +68,7 @@ public class ComponentSelectorSerializer extends AbstractSerializer<ComponentSel
             Path projectPath = Path.path(decoder.readString());
             return new DefaultProjectComponentSelector(buildIdentifier, identityPath, projectPath, projectPath.getName(), readAttributes(decoder));
         } else if (Implementation.MODULE.getId() == id) {
-            return DefaultModuleComponentSelector.newSelector(decoder.readString(), decoder.readString(), readVersionConstraint(decoder), readAttributes(decoder));
+            return DefaultModuleComponentSelector.newSelector(DefaultModuleIdentifier.newId(decoder.readString(), decoder.readString()), readVersionConstraint(decoder), readAttributes(decoder));
         } else if (Implementation.LIBRARY.getId() == id) {
             return new DefaultLibraryComponentSelector(decoder.readString(), decoder.readNullableString(), decoder.readNullableString());
         }
@@ -80,13 +81,15 @@ public class ComponentSelectorSerializer extends AbstractSerializer<ComponentSel
     }
 
     ImmutableVersionConstraint readVersionConstraint(Decoder decoder) throws IOException {
+        String requires = decoder.readString();
         String prefers = decoder.readString();
+        String strictly = decoder.readString();
         int rejectCount = decoder.readSmallInt();
         List<String> rejects = Lists.newArrayListWithCapacity(rejectCount);
         for (int i = 0; i < rejectCount; i++) {
             rejects.add(decoder.readString());
         }
-        return new DefaultImmutableVersionConstraint(prefers, rejects);
+        return new DefaultImmutableVersionConstraint(prefers, requires, strictly, rejects);
     }
 
     public void write(Encoder encoder, ComponentSelector value) throws IOException {
@@ -141,7 +144,9 @@ public class ComponentSelectorSerializer extends AbstractSerializer<ComponentSel
     }
 
     private void writeVersionConstraint(Encoder encoder, VersionConstraint versionConstraint) throws IOException {
+        encoder.writeString(versionConstraint.getRequiredVersion());
         encoder.writeString(versionConstraint.getPreferredVersion());
+        encoder.writeString(versionConstraint.getStrictVersion());
         List<String> rejectedVersions = versionConstraint.getRejectedVersions();
         encoder.writeSmallInt(rejectedVersions.size());
         for (String rejectedVersion : rejectedVersions) {

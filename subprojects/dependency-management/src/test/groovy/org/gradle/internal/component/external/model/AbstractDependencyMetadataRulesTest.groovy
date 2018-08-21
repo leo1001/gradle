@@ -21,6 +21,7 @@ import org.gradle.api.Action
 import org.gradle.api.artifacts.DependenciesMetadata
 import org.gradle.api.attributes.Attribute
 import org.gradle.api.internal.artifacts.DefaultImmutableModuleIdentifierFactory
+import org.gradle.api.internal.artifacts.DefaultModuleIdentifier
 import org.gradle.api.internal.artifacts.DefaultModuleVersionIdentifier
 import org.gradle.api.internal.artifacts.dependencies.DefaultMutableVersionConstraint
 import org.gradle.api.internal.artifacts.repositories.metadata.IvyMutableModuleMetadataFactory
@@ -33,6 +34,8 @@ import org.gradle.api.internal.notations.DependencyMetadataNotationParser
 import org.gradle.api.specs.Spec
 import org.gradle.api.specs.Specs
 import org.gradle.internal.component.external.descriptor.MavenScope
+import org.gradle.internal.component.external.model.ivy.IvyDependencyDescriptor
+import org.gradle.internal.component.external.model.maven.MavenDependencyDescriptor
 import org.gradle.internal.component.model.ComponentAttributeMatcher
 import org.gradle.internal.component.model.LocalComponentDependencyMetadata
 import org.gradle.internal.component.model.VariantResolveMetadata
@@ -77,14 +80,14 @@ abstract class AbstractDependencyMetadataRulesTest extends Specification {
             dependencies = [] //not supported in Ivy metadata
         } else {
             dependencies = deps.collect { name ->
-                new IvyDependencyDescriptor(newSelector("org.test", name, "1.0"), ImmutableListMultimap.of("default", "default"))
+                new IvyDependencyDescriptor(newSelector(DefaultModuleIdentifier.newId("org.test", name), "1.0"), ImmutableListMultimap.of("default", "default"))
             }
         }
         ivyMetadataFactory.create(componentIdentifier, dependencies)
     }
     private mavenComponentMetadata(String[] deps) {
         def dependencies = deps.collect { name ->
-            new MavenDependencyDescriptor(MavenScope.Compile, addAllDependenciesAsConstraints(), newSelector("org.test", name, "1.0"), null, [])
+            new MavenDependencyDescriptor(MavenScope.Compile, addAllDependenciesAsConstraints(), newSelector(DefaultModuleIdentifier.newId("org.test", name), "1.0"), null, [])
         }
         mavenMetadataFactory.create(componentIdentifier, dependencies)
     }
@@ -168,16 +171,16 @@ abstract class AbstractDependencyMetadataRulesTest extends Specification {
         }
 
         when:
-        doAddDependencyMetadataRule(metadataImplementation, "default", rule)
+        doAddDependencyMetadataRule(metadataImplementation, rule)
         def dependencies = selectTargetConfigurationMetadata(metadataImplementation).dependencies
 
         then:
         if (supportedInMetadata(metadataType)) {
-            dependencies.size() == 2
-            dependencies[0].pending == addAllDependenciesAsConstraints()
-            dependencies[1].pending == addAllDependenciesAsConstraints()
+            assert dependencies.size() == 2
+            assert dependencies[0].pending == addAllDependenciesAsConstraints()
+            assert dependencies[1].pending == addAllDependenciesAsConstraints()
         } else {
-            dependencies.empty
+            assert dependencies.empty
         }
 
         where:
@@ -195,6 +198,7 @@ abstract class AbstractDependencyMetadataRulesTest extends Specification {
                 assert dependencies.size() == 1
                 dependencies[0].version {
                     it.strictly "2.0"
+                    it.reject "[3.0,)"
                 }
             } else {
                 assert dependencies.empty
@@ -202,16 +206,17 @@ abstract class AbstractDependencyMetadataRulesTest extends Specification {
         }
 
         when:
-        doAddDependencyMetadataRule(metadataImplementation, "default", rule)
+        doAddDependencyMetadataRule(metadataImplementation, rule)
         def dependencies = selectTargetConfigurationMetadata(metadataImplementation).dependencies
 
         then:
         if (supportedInMetadata(metadataType)) {
-            dependencies[0].selector.version == "2.0"
-            dependencies[0].selector.versionConstraint.rejectedVersions[0] == "]2.0,)"
-            dependencies[0].pending == addAllDependenciesAsConstraints()
+            assert dependencies[0].selector.version == "2.0"
+            assert dependencies[0].selector.versionConstraint.strictVersion == "2.0"
+            assert dependencies[0].selector.versionConstraint.rejectedVersions[0] == "[3.0,)"
+            assert dependencies[0].pending == addAllDependenciesAsConstraints()
         } else {
-            dependencies.empty
+            assert dependencies.empty
         }
 
         where:
@@ -233,7 +238,7 @@ abstract class AbstractDependencyMetadataRulesTest extends Specification {
         def dependencies = selectTargetConfigurationMetadata(metadataImplementation).dependencies
 
         then:
-        dependencies.collect { it.selector } == [newSelector("org.test", "added", "1.0") ]
+        dependencies.collect { it.selector } == [newSelector(DefaultModuleIdentifier.newId("org.test", "added"), "1.0") ]
 
         where:
         metadataType | metadataImplementation
@@ -269,9 +274,9 @@ abstract class AbstractDependencyMetadataRulesTest extends Specification {
     }
 
     def selectTargetConfigurationMetadata(ModuleComponentResolveMetadata immutable) {
-        def componentIdentifier = DefaultModuleComponentIdentifier.newId("org.test", "consumer", "1.0")
+        def componentIdentifier = DefaultModuleComponentIdentifier.newId(DefaultModuleIdentifier.newId("org.test", "consumer"), "1.0")
         def consumerIdentifier = DefaultModuleVersionIdentifier.newId(componentIdentifier)
-        def componentSelector = newSelector(consumerIdentifier.group, consumerIdentifier.name, new DefaultMutableVersionConstraint(consumerIdentifier.version))
+        def componentSelector = newSelector(consumerIdentifier.module, new DefaultMutableVersionConstraint(consumerIdentifier.version))
         def consumer = new LocalComponentDependencyMetadata(componentIdentifier, componentSelector, "default", attributes, ImmutableAttributes.EMPTY, null, [] as List, [], false, false, true, false, null)
 
         consumer.selectConfigurations(attributes, immutable, schema)[0]

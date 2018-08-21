@@ -19,13 +19,15 @@ package org.gradle.api.internal.changedetection.state;
 import org.gradle.caching.internal.BuildCacheHasher;
 import org.gradle.caching.internal.DefaultBuildCacheHasher;
 import org.gradle.internal.hash.HashCode;
+import org.gradle.internal.snapshot.RegularFileSnapshot;
 
+import javax.annotation.Nullable;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.zip.ZipEntry;
 
 /**
- * Caches the result of hashing a {@link RegularFileSnapshot} with a {@link ResourceHasher}.
+ * Caches the result of hashing regular files with a {@link ResourceHasher}.
  * It does not cache the result of hashing {@link ZipEntry}s.
  * It also caches the absence of a hash.
  */
@@ -42,6 +44,7 @@ public class CachingResourceHasher implements ResourceHasher {
         this.delegateConfigurationHash = hasher.hash();
     }
 
+    @Nullable
     @Override
     public HashCode hash(RegularFileSnapshot fileSnapshot) {
         return resourceSnapshotterCacheService.hashFile(fileSnapshot, delegate, delegateConfigurationHash);

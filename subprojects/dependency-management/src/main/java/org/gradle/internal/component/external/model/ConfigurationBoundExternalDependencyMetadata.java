@@ -65,6 +65,10 @@ public class ConfigurationBoundExternalDependencyMetadata implements ModuleDepen
         return this;
     }
 
+    public ExternalDependencyDescriptor getDependencyDescriptor() {
+        return dependencyDescriptor;
+    }
+
     /**
      * Choose a set of target configurations based on: a) the consumer attributes (with associated schema) and b) the target component.
      *
@@ -98,7 +102,7 @@ public class ConfigurationBoundExternalDependencyMetadata implements ModuleDepen
     public DependencyMetadata withTarget(ComponentSelector target) {
         if (target instanceof ModuleComponentSelector) {
             ModuleComponentSelector moduleTarget = (ModuleComponentSelector) target;
-            ModuleComponentSelector newSelector = DefaultModuleComponentSelector.newSelector(moduleTarget.getGroup(), moduleTarget.getModule(), moduleTarget.getVersionConstraint(), moduleTarget.getAttributes());
+            ModuleComponentSelector newSelector = DefaultModuleComponentSelector.newSelector(moduleTarget.getModuleIdentifier(), moduleTarget.getVersionConstraint(), moduleTarget.getAttributes());
             if (newSelector.equals(getSelector())) {
                 return this;
             }
@@ -117,7 +121,7 @@ public class ConfigurationBoundExternalDependencyMetadata implements ModuleDepen
         if (requestedVersion.equals(selector.getVersionConstraint())) {
             return this;
         }
-        ModuleComponentSelector newSelector = DefaultModuleComponentSelector.newSelector(selector.getGroup(), selector.getModule(), requestedVersion, selector.getAttributes());
+        ModuleComponentSelector newSelector = DefaultModuleComponentSelector.newSelector(selector.getModuleIdentifier(), requestedVersion, selector.getAttributes());
         return withRequested(newSelector);
     }
 

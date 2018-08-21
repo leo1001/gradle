@@ -16,6 +16,7 @@
 
 package org.gradle.api.internal.artifacts.transform;
 
+import org.gradle.api.artifacts.component.ComponentArtifactIdentifier;
 import org.gradle.api.internal.artifacts.ivyservice.resolveengine.artifact.ResolvableArtifact;
 import org.gradle.api.internal.artifacts.ivyservice.resolveengine.artifact.ResolvedArtifactSet;
 import org.gradle.internal.operations.BuildOperationQueue;
@@ -25,25 +26,29 @@ import java.io.File;
 import java.util.Map;
 
 class TransformingAsyncArtifactListener implements ResolvedArtifactSet.AsyncArtifactListener {
-    private final Map<ResolvableArtifact, TransformArtifactOperation> artifactResults;
+    private final Map<ComponentArtifactIdentifier, TransformArtifactOperation> artifactResults;
     private final Map<File, TransformFileOperation> fileResults;
+    private final ArtifactTransformListener transformListener;
     private final BuildOperationQueue<RunnableBuildOperation> actions;
     private final ResolvedArtifactSet.AsyncArtifactListener delegate;
     private final ArtifactTransformer transform;
 
-    TransformingAsyncArtifactListener(ArtifactTransformer transform, ResolvedArtifactSet.AsyncArtifactListener delegate, BuildOperationQueue<RunnableBuildOperation> actions, Map<ResolvableArtifact, TransformArtifactOperation> artifactResults, Map<File, TransformFileOperation> fileResults) {
+    TransformingAsyncArtifactListener(ArtifactTransformer transform, ResolvedArtifactSet.AsyncArtifactListener delegate, BuildOperationQueue<RunnableBuildOperation> actions, Map<ComponentArtifactIdentifier, TransformArtifactOperation> artifactResults, Map<File, TransformFileOperation> fileResults, ArtifactTransformListener transformListener) {
         this.artifactResults = artifactResults;
         this.actions = actions;
         this.transform = transform;
         this.delegate = delegate;
         this.fileResults = fileResults;
+        this.transformListener = transformListener;
     }
 
     @Override
     public void artifactAvailable(ResolvableArtifact artifact) {
-        TransformArtifactOperation operation = new TransformArtifactOperation(artifact, transform);
-        artifactResults.put(artifact, operation);
-        if (transform.hasCachedResult(artifact.getFile())) {
+        ComponentArtifactIdentifier artifactId = artifact.getId();
+        File file = artifact.getFile();
+        TransformArtifactOperation operation = new TransformArtifactOperation(artifactId, file, transform, transformListener);
+        artifactResults.put(artifactId, operation);
+        if (transform.hasCachedResult(file)) {
             operation.run(null);
         } else {
             actions.add(operation);
@@ -63,7 +68,7 @@ class TransformingAsyncArtifactListener implements ResolvedArtifactSet.AsyncArti
 
     @Override
     public void fileAvailable(File file) {
-        TransformFileOperation operation = new TransformFileOperation(file, transform);
+        TransformFileOperation operation = new TransformFileOperation(file, transform, transformListener);
         fileResults.put(file, operation);
         if (transform.hasCachedResult(file)) {
             operation.run(null);

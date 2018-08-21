@@ -1,5 +1,7 @@
-apply plugin: 'java'
-apply plugin: 'maven-publish'
+plugins {
+    id 'java'
+    id 'maven-publish'
+}
 
 group = 'org.gradle.sample'
 version = '1.0'
@@ -9,7 +11,7 @@ task sourcesJar(type: Jar) {
     from sourceSets.main.allJava
 }
 
-// START SNIPPET publishing
+// tag::publishing[]
 publishing {
     publications {
         binary(MavenPublication) {
@@ -23,25 +25,24 @@ publishing {
     repositories {
         // change URLs to point to your repos, e.g. http://my.org/repo
         maven {
-            name "external"
-            url "$buildDir/repos/external"
+            name = 'external'
+            url = "$buildDir/repos/external"
         }
         maven {
-            name "internal"
-            url "$buildDir/repos/internal"
+            name = 'internal'
+            url = "$buildDir/repos/internal"
         }
     }
 }
-// END SNIPPET publishing
+// end::publishing[]
 
-// START SNIPPET task-config
+// tag::task-config[]
 tasks.withType(PublishToMavenRepository) {
     onlyIf {
-        if (repository == publishing.repositories.external)
-            return publication == publishing.publications.binary
-        if (repository == publishing.repositories.internal)
-            return publication == publishing.publications.binaryAndSources
-        return false
+        (repository == publishing.repositories.external &&
+            publication == publishing.publications.binary) ||
+        (repository == publishing.repositories.internal &&
+            publication == publishing.publications.binaryAndSources)
     }
 }
 tasks.withType(PublishToMavenLocal) {
@@ -49,22 +50,22 @@ tasks.withType(PublishToMavenLocal) {
         publication == publishing.publications.binaryAndSources
     }
 }
-// END SNIPPET task-config
+// end::task-config[]
 
-// START SNIPPET shorthand-tasks
+// tag::shorthand-tasks[]
 task publishToExternalRepository {
-    group "publishing"
-    description "Publishes all Maven publications to Maven repository 'external'."
+    group = 'publishing'
+    description = 'Publishes all Maven publications to the external Maven repository.'
     dependsOn tasks.withType(PublishToMavenRepository).matching {
         it.repository == publishing.repositories.external
     }
 }
+// end::shorthand-tasks[]
 task publishForDevelopment {
-    group "publishing"
-    description "Publishes all Maven publications to Maven repository 'internal' and the local Maven repository."
+    group = 'publishing'
+    description = 'Publishes all Maven publications to the internal Maven repository and the local Maven repository.'
     dependsOn tasks.withType(PublishToMavenRepository).matching {
         it.repository == publishing.repositories.internal
     }
     dependsOn tasks.withType(PublishToMavenLocal)
 }
-// END SNIPPET shorthand-tasks

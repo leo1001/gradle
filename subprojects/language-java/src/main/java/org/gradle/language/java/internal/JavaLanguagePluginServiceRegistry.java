@@ -16,6 +16,7 @@
 
 package org.gradle.language.java.internal;
 
+import org.gradle.api.internal.cache.StringInterner;
 import org.gradle.api.internal.component.ArtifactType;
 import org.gradle.api.internal.component.ComponentTypeRegistry;
 import org.gradle.api.internal.file.FileCollectionFactory;
@@ -30,8 +31,10 @@ import org.gradle.api.logging.configuration.ShowStacktrace;
 import org.gradle.cache.internal.FileContentCacheFactory;
 import org.gradle.internal.hash.FileHasher;
 import org.gradle.internal.hash.StreamHasher;
+import org.gradle.internal.operations.BuildOperationExecutor;
 import org.gradle.internal.service.ServiceRegistration;
 import org.gradle.internal.service.scopes.AbstractPluginServiceRegistry;
+import org.gradle.internal.snapshot.FileSystemSnapshotter;
 import org.gradle.jvm.JvmLibrary;
 import org.gradle.language.java.artifact.JavadocArtifact;
 
@@ -62,8 +65,8 @@ public class JavaLanguagePluginServiceRegistry extends AbstractPluginServiceRegi
     }
 
     private static class JavaProjectScopeServices {
-        public IncrementalCompilerFactory createIncrementalCompilerFactory(FileOperations fileOperations, StreamHasher streamHasher, FileHasher fileHasher, GeneralCompileCaches compileCaches) {
-            return new IncrementalCompilerFactory(fileOperations, streamHasher, fileHasher, compileCaches);
+        public IncrementalCompilerFactory createIncrementalCompilerFactory(FileOperations fileOperations, StreamHasher streamHasher, GeneralCompileCaches compileCaches, BuildOperationExecutor buildOperationExecutor, StringInterner interner, FileSystemSnapshotter fileSystemSnapshotter, FileHasher fileHasher) {
+            return new IncrementalCompilerFactory(fileOperations, streamHasher, compileCaches, buildOperationExecutor, interner, fileSystemSnapshotter, fileHasher);
         }
     }
 }

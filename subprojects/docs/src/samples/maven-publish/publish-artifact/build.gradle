@@ -1,39 +1,41 @@
-apply plugin: "base"
-apply plugin: "maven-publish"
-
-group = "org.gradle.sample"
-version = "1.0"
-
-// START SNIPPET custom-artifact
-def rpmFile = file("$buildDir/rpms/my-package.rpm")
-def rpmArtifact = artifacts.add("archives", rpmFile) {
-    type "rpm"
-    builtBy "rpm"
+plugins {
+    id 'base'
+    id 'maven-publish'
 }
-// END SNIPPET custom-artifact
+
+group = 'org.gradle.sample'
+version = '1.0'
+
+// tag::custom-artifact[]
+def rpmFile = file("$buildDir/rpms/my-package.rpm")
+def rpmArtifact = artifacts.add('archives', rpmFile) {
+    type 'rpm'
+    builtBy 'rpm'
+}
+// end::custom-artifact[]
 
 task rpm() {
     outputs.file rpmFile
     doLast {
         // produce real RPM here
-        rpmFile << "file contents"
+        rpmFile << 'file contents'
     }
 }
 
-// START SNIPPET custom-artifact
+// tag::custom-artifact-publication[]
 publishing {
     publications {
         maven(MavenPublication) {
             artifact rpmArtifact
         }
     }
-// END SNIPPET custom-artifact
+// end::custom-artifact-publication[]
     repositories {
         // change URLs to point to your repo, e.g. http://my.org/repo
         maven {
-            url "$buildDir/repo"
+            url = "$buildDir/repo"
         }
     }
-// START SNIPPET custom-artifact
+// tag::custom-artifact-publication[]
 }
-// END SNIPPET custom-artifact
+// end::custom-artifact-publication[]

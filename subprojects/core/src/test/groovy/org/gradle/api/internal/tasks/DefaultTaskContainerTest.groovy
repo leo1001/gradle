@@ -18,36 +18,53 @@ package org.gradle.api.internal.tasks
 
 import org.gradle.api.Action
 import org.gradle.api.DefaultTask
+import org.gradle.api.DomainObjectCollection
+import org.gradle.api.GradleException
 import org.gradle.api.InvalidUserDataException
 import org.gradle.api.Rule
 import org.gradle.api.Task
 import org.gradle.api.UnknownTaskException
+import org.gradle.api.internal.AbstractNamedDomainObjectCollectionSpec
+import org.gradle.api.internal.AsmBackedClassGenerator
 import org.gradle.api.internal.GradleInternal
 import org.gradle.api.internal.TaskInternal
+import org.gradle.api.internal.project.BuildOperationCrossProjectConfigurator
 import org.gradle.api.internal.project.ProjectInternal
 import org.gradle.api.internal.project.taskfactory.ITaskFactory
+import org.gradle.api.internal.project.taskfactory.TaskFactory
 import org.gradle.api.internal.project.taskfactory.TaskIdentity
+import org.gradle.api.provider.Provider
 import org.gradle.api.tasks.TaskDependency
 import org.gradle.initialization.ProjectAccessListener
+import org.gradle.internal.operations.BuildOperationExecutor
 import org.gradle.internal.operations.TestBuildOperationExecutor
 import org.gradle.internal.reflect.DirectInstantiator
+import org.gradle.internal.service.ServiceRegistry
 import org.gradle.model.internal.registry.ModelRegistry
 import org.gradle.util.Path
-import spock.lang.Specification
 
 import static java.util.Collections.singletonMap
+import static org.gradle.util.WrapUtil.toList
 
-class DefaultTaskContainerTest extends Specification {
+class DefaultTaskContainerTest extends AbstractNamedDomainObjectCollectionSpec<Task> {
 
     private taskFactory = Mock(ITaskFactory)
     def modelRegistry = Mock(ModelRegistry)
     private project = Mock(ProjectInternal, name: "<project>") {
+        identityPath(_) >> { String name ->
+            Path.path(":project").child(name)
+        }
+        projectPath(_) >> { String name ->
+            Path.path(":project").child(name)
+        }
         getGradle() >> Mock(GradleInternal) {
             getIdentityPath() >> Path.path(":")
         }
+        getServices() >> Mock(ServiceRegistry)
     }
     private taskCount = 1;
     private accessListener = Mock(ProjectAccessListener)
+    private BuildOperationExecutor buildOperationExecutor = new TestBuildOperationExecutor()
     private container = new DefaultTaskContainerFactory(
         modelRegistry,
         DirectInstantiator.INSTANCE,
@@ -55,8 +72,16 @@ class DefaultTaskContainerTest extends Specification {
         project,
         accessListener,
         new TaskStatistics(),
-        new TestBuildOperationExecutor()
+        buildOperationExecutor,
+        new BuildOperationCrossProjectConfigurator(buildOperationExecutor)
     ).create()
+
+    @Override
+    final DomainObjectCollection<Task> getContainer() {
+        return container
+    }
+
+    final boolean externalProviderAllowed = false
 
     void 'cannot create task with no name'() {
         when:
@@ -210,6 +235,71 @@ class DefaultTaskContainerTest extends Specification {
         1 * action.execute(task)
     }
 
+    void "create by map wraps task creation failure"() {
+        given:
+        def failure = new RuntimeException()
+
+        taskFactory.create(_ as TaskIdentity) >> { throw failure }
+
+        when:
+        container.create(name: "task")
+
+        then:
+        def e = thrown(GradleException)
+        e.message == "Could not create task ':project:task'."
+        e.cause == failure
+    }
+
+    void "create wraps task creation failure"() {
+        given:
+        def failure = new RuntimeException()
+
+        taskFactory.create(_ as TaskIdentity) >> { throw failure }
+
+        when:
+        container.create("task")
+
+        then:
+        def e = thrown(GradleException)
+        e.message == "Could not create task ':project:task'."
+        e.cause == failure
+    }
+
+    void "create with action wraps task creation failure"() {
+        given:
+        def failure = new RuntimeException()
+        def action = Mock(Action)
+
+        taskFactory.create(_ as TaskIdentity) >> { throw failure }
+
+        when:
+        container.create("task", action)
+
+        then:
+        def e = thrown(GradleException)
+        e.message == "Could not create task ':project:task'."
+        e.cause == failure
+    }
+
+    void "create wraps task configuration failure"() {
+        given:
+        def failure = new RuntimeException()
+        def action = Mock(Action)
+        def task = task("task")
+
+        taskFactory.create(_ as TaskIdentity) >> task
+        action.execute(task) >> { throw failure }
+
+        when:
+        container.all(action)
+        container.create("task", action)
+
+        then:
+        def e = thrown(GradleException)
+        e.message == "Could not create task ':project:task'."
+        e.cause == failure
+    }
+
     void "replaces task by name"() {
         given:
         def task = task("task")
@@ -271,6 +361,71 @@ class DefaultTaskContainerTest extends Specification {
 
         then:
         container.getByName("task") == newTask
+    }
+
+    void "replaces registered task without realizing it"() {
+        given:
+        container.register("task")
+        def newTask = task("task")
+
+        when:
+        def replaced = container.replace("task")
+
+        then:
+        noExceptionThrown()
+        replaced == newTask
+        container.getByName("task") == newTask
+
+        and:
+        1 * taskFactory.create(_ as TaskIdentity) >> newTask
+    }
+
+    void "replaces unrealized registered task will execute configuration action against new task"() {
+        given:
+        def action = Mock(Action)
+        def provider = container.register("task", action)
+        provider.configure(action)
+        container.configureEach(action)
+        def newTask = task("task")
+
+        when:
+        container.replace("task")
+
+        then:
+        1 * taskFactory.create(_ as TaskIdentity) >> newTask
+        3 * action.execute(newTask)
+    }
+
+    void "replaces registered task with compatible type"() {
+        given:
+        container.register("task", CustomTask)
+        def newTask = task("task", MyCustomTask)
+
+        when:
+        def replaced = container.replace("task", MyCustomTask)
+
+        then:
+        noExceptionThrown()
+        replaced == newTask
+
+        and:
+        1 * taskFactory.create(_ as TaskIdentity) >> newTask
+    }
+
+    void "returns the same Task instance from TaskProvider after replace"() {
+        given:
+        def newTask = task("task")
+        1 * taskFactory.create(_ as TaskIdentity) >> newTask
+
+        when:
+        def p1 = container.register("task")
+        def p2 = container.named("task")
+        def replaced = container.replace("task")
+
+        then:
+        p1.get() == p2.get()
+        p1.get() == replaced
+        p1.get() == container.getByName("task")
     }
 
     void "fails if unknown task is requested"() {
@@ -407,6 +562,54 @@ class DefaultTaskContainerTest extends Specification {
         and:
         1 * rule.apply("task")
         0 * rule._
+    }
+
+    void "can query task name and type from task provider after registration without realizing it"() {
+        def action = Mock(Action)
+
+        given:
+        def provider = null
+        container.configureEach(action)
+
+        when:
+        provider = container.register("a")
+
+        then:
+        provider.type == DefaultTask
+        provider.name == "a"
+        0 * action.execute(_)
+
+        when:
+        provider = container.register("b", Mock(Action))
+
+        then:
+        provider.type == DefaultTask
+        provider.name == "b"
+        0 * action.execute(_)
+
+        when:
+        provider = container.register("c", CustomTask)
+
+        then:
+        provider.type == CustomTask
+        provider.name == "c"
+        0 * action.execute(_)
+
+        when:
+        provider = container.register("d", CustomTask, Mock(Action))
+
+        then:
+        provider.type == CustomTask
+        provider.name == "d"
+        0 * action.execute(_)
+
+        when:
+        provider = container.register("e", CustomTask, "some", "constructor", "args")
+
+        then:
+        provider.type == CustomTask
+        provider.name == "e"
+        0 * action.execute(_)
     }
 
     void "can define task to create and configure later given name and type"() {
@@ -744,8 +947,8 @@ class DefaultTaskContainerTest extends Specification {
         provider.get()
 
         then:
-        def ex = thrown(IllegalStateException)
-        ex.message == "Could not create task 'task' (DefaultTask)"
+        def ex = thrown(GradleException)
+        ex.message == "Could not create task ':project:task'."
         ex.cause.message == "Failing creation rule"
 
         and:
@@ -767,9 +970,8 @@ class DefaultTaskContainerTest extends Specification {
         provider.get()
 
         then:
-        ex = thrown(IllegalStateException)
-        ex.message == "Could not create task 'task' (DefaultTask)"
-        ex.cause.message == "Failing creation rule"
+        def ex2 = thrown(GradleException)
+        ex2.is(ex)
         0 * _
     }
 
@@ -786,8 +988,8 @@ class DefaultTaskContainerTest extends Specification {
         provider.get()
 
         then:
-        def ex = thrown(IllegalStateException)
-        ex.message == "Could not create task 'task' (DefaultTask)"
+        def ex = thrown(GradleException)
+        ex.message == "Could not create task ':project:task'."
         ex.cause.message == "Failing creation rule"
 
         and:
@@ -802,37 +1004,18 @@ class DefaultTaskContainerTest extends Specification {
 
         when:
         creationProvider.get() == task
+
         then:
-        ex = thrown(IllegalStateException)
-        ex.message == "Could not create task 'task' (DefaultTask)"
-        ex.cause.message == "Failing creation rule"
+        def ex2 = thrown(GradleException)
+        ex2.is(ex)
 
         when:
         provider.get()
 
         then:
-        ex = thrown(IllegalStateException)
-        ex.message == "Could not create task 'task' (DefaultTask)"
-        ex.cause.message == "Failing creation rule"
+        def ex3 = thrown(GradleException)
+        ex3.is(ex)
         0 * _
-    }
-
-    void "fails task creation when task instantiation is unsuccessful"() {
-        def action = Mock(Action)
-
-        when:
-        container.create("task", DefaultTask, action)
-
-        then:
-        def ex = thrown(RuntimeException)
-        ex.message == "Failing constructor"
-
-        and:
-        container.findByName("task") == null
-
-        and:
-        1 * taskFactory.create(_ as TaskIdentity) >> { throw new RuntimeException("Failing constructor") }
-        0 * action.execute(_)
     }
 
     void "fails later creation upon realizing through register provider when task instantiation is unsuccessful"() {
@@ -848,8 +1031,8 @@ class DefaultTaskContainerTest extends Specification {
         provider.get()
 
         then:
-        def ex = thrown(IllegalStateException)
-        ex.message == "Could not create task 'task' (DefaultTask)"
+        def ex = thrown(GradleException)
+        ex.message == "Could not create task ':project:task'."
         ex.cause.message == "Failing constructor"
 
         and:
@@ -863,18 +1046,17 @@ class DefaultTaskContainerTest extends Specification {
 
         when:
         container.findByName("task")
+
         then:
-        ex = thrown(IllegalStateException)
-        ex.message == "Could not create task 'task' (DefaultTask)"
-        ex.cause.message == "Failing constructor"
+        def ex2 = thrown(GradleException)
+        ex2.is(ex)
 
         when:
         provider.getOrNull()
 
         then:
-        ex = thrown(IllegalStateException)
-        ex.message == "Could not create task 'task' (DefaultTask)"
-        ex.cause.message == "Failing constructor"
+        def ex3 = thrown(GradleException)
+        ex3.is(ex)
         0 * _
     }
 
@@ -890,54 +1072,28 @@ class DefaultTaskContainerTest extends Specification {
         provider.get()
 
         then:
-        def ex = thrown(IllegalStateException)
-        ex.message == "Could not create task 'task' (DefaultTask)"
+        def ex = thrown(GradleException)
+        ex.message == "Could not create task ':project:task'."
         ex.cause.message == "Failing constructor"
+
         and:
         provider.isPresent()
         creationProvider.isPresent()
 
         when:
         container.findByName("task")
+
         then:
-        ex = thrown(IllegalStateException)
-        ex.message == "Could not create task 'task' (DefaultTask)"
-        ex.cause.message == "Failing constructor"
+        def ex2 = thrown(GradleException)
+        ex2.is(ex)
 
         when:
         provider.getOrNull()
+
         then:
-        ex = thrown(IllegalStateException)
-        ex.message == "Could not create task 'task' (DefaultTask)"
-        ex.cause.message == "Failing constructor"
+        def ex3 = thrown(GradleException)
+        ex3.is(ex)
         0 * _
-    }
-
-    void "fails task creation when task configuration via withType is unsuccessful"() {
-        def action = Mock(Action)
-        def task = task("task")
-
-        given:
-        container.withType(DefaultTask, action)
-
-        when:
-        container.create("task", DefaultTask)
-
-        then:
-        def ex = thrown(RuntimeException)
-        ex.message == "Failing withType configuration rule"
-
-        and:
-        container.findByName("task") != null
-        container.findByName("task") == task
-
-        and:
-        container.withType(DefaultTask).named("task").isPresent()
-        container.withType(DefaultTask).named("task").get() == task
-
-        and:
-        1 * taskFactory.create(_ as TaskIdentity) >> task
-        1 * action.execute(_) >> { throw new RuntimeException("Failing withType configuration rule") }
     }
 
     void "fails later creation when task configuration via withType is unsuccessful"() {
@@ -952,8 +1108,8 @@ class DefaultTaskContainerTest extends Specification {
         container.register("task", DefaultTask)
 
         then:
-        def ex = thrown(IllegalStateException)
-        ex.message == "Could not create task 'task' (DefaultTask)"
+        def ex = thrown(GradleException)
+        ex.message == "Could not create task ':project:task'."
         ex.cause.message == "Failing withType configuration rule"
 
         and:
@@ -980,8 +1136,9 @@ class DefaultTaskContainerTest extends Specification {
         container.create("task", DefaultTask)
 
         then:
-        def ex = thrown(RuntimeException)
-        ex.message == "Failing configureEach configuration rule"
+        def ex = thrown(GradleException)
+        ex.message == "Could not create task ':project:task'."
+        ex.cause.message == "Failing configureEach configuration rule"
 
         and:
         container.findByName("task") != null
@@ -1008,8 +1165,8 @@ class DefaultTaskContainerTest extends Specification {
         provider.get()
 
         then:
-        def ex = thrown(IllegalStateException)
-        ex.message == "Could not create task 'task' (DefaultTask)"
+        def ex = thrown(GradleException)
+        ex.message == "Could not create task ':project:task'."
         ex.cause.message == "Failing configureEach configuration rule"
 
         and:
@@ -1031,9 +1188,8 @@ class DefaultTaskContainerTest extends Specification {
         provider.get()
 
         then:
-        ex = thrown(IllegalStateException)
-        ex.message == "Could not create task 'task' (DefaultTask)"
-        ex.cause.message == "Failing configureEach configuration rule"
+        def ex2 = thrown(GradleException)
+        ex2.is(ex)
         0 * _
     }
 
@@ -1051,8 +1207,8 @@ class DefaultTaskContainerTest extends Specification {
         when:
         provider.get()
         then:
-        def ex = thrown(IllegalStateException)
-        ex.message == "Could not create task 'task' (DefaultTask)"
+        def ex = thrown(GradleException)
+        ex.message == "Could not create task ':project:task'."
         ex.cause.message == "Failing configureEach configuration rule"
         and:
         provider.isPresent()
@@ -1062,16 +1218,15 @@ class DefaultTaskContainerTest extends Specification {
         when:
         creationProvider.get()
         then:
-        ex = thrown(IllegalStateException)
-        ex.message == "Could not create task 'task' (DefaultTask)"
-        ex.cause.message == "Failing configureEach configuration rule"
+        def ex2 = thrown(GradleException)
+        ex2.is(ex)
 
         when:
         provider.get()
         then:
-        ex = thrown(IllegalStateException)
-        ex.message == "Could not create task 'task' (DefaultTask)"
-        ex.cause.message == "Failing configureEach configuration rule"
+        def ex3 = thrown(GradleException)
+        ex3.is(ex)
+
         0 * _
     }
 
@@ -1299,7 +1454,7 @@ class DefaultTaskContainerTest extends Specification {
         container.register("task", CustomTask)
 
         when:
-        container.withType(DefaultTask).named("task")
+        container.withType(MyCustomTask).named("task")
 
         then:
         def ex = thrown(UnknownTaskException)
@@ -1307,51 +1462,42 @@ class DefaultTaskContainerTest extends Specification {
         0 * taskFactory.create(_ as TaskIdentity)
 
         when:
-        container.create([name: "task", type: DefaultTask, overwrite: true])
-        container.withType(DefaultTask).named("task")
+        container.create([name: "task", type: MyCustomTask, overwrite: true])
+        container.withType(MyCustomTask).named("task")
 
         then:
         noExceptionThrown()
-        1 * taskFactory.create(_ as TaskIdentity) >> task("task")
+        1 * taskFactory.create(_ as TaskIdentity) >> task("task", MyCustomTask)
     }
 
-    void "can remove lazy created task without breaking TaskProvider"() {
-        given:
-        def customTask = task("task", CustomTask)
-        1 * taskFactory.create(_ as TaskIdentity, _ as Object[]) >> customTask
-
-        and:
-        def createProvider = container.register("task", CustomTask)
-
-        when:
-        container.remove(customTask)
-
-        then:
-        createProvider.get() == customTask
-        createProvider.present
-
-        when:
-        def getProvider = container.named("task")
-
-        then:
-        getProvider.get() == customTask
-        getProvider.present
-    }
-
-    void "can remove eager created task without breaking TaskProvider"() {
+    void "can remove eager created task and named provider update his state"() {
         given:
         taskFactory.create(_ as TaskIdentity) >> task("task", CustomTask)
 
         and:
         def customTask = container.create("task", CustomTask)
-        def getProvider = container.named("task")
 
         when:
-        container.remove(customTask)
+        def provider = container.named("task")
 
         then:
-        getProvider.get() == customTask
-        getProvider.present
+        provider.present
+        provider.get() == customTask
+
+        when:
+        def didRemoved = container.remove(customTask)
+
+        then:
+        didRemoved
+        !provider.present
+        provider.orNull == null
+
+        when:
+        provider.get()
+
+        then:
+        def ex = thrown(IllegalStateException)
+        ex.message == "The domain object 'task' (Task) for this provider is no longer present in its container."
     }
 
     void "lazy task that is realized and then removed is not recreated on iteration"() {
@@ -1378,6 +1524,447 @@ class DefaultTaskContainerTest extends Specification {
         container.findByName("task") == null
     }
 
+    def "cannot add a provider directly to the task container"() {
+        given:
+        def provider = Mock(Provider) {
+            _ * get() >> task("foo")
+        }
+
+        when:
+        container.addLater(provider)
+
+        then:
+        thrown(UnsupportedOperationException)
+    }
+
+    ITaskFactory factory = new TaskFactory(new AsmBackedClassGenerator()).createChild(project, DirectInstantiator.INSTANCE)
+    final SomeTask a = factory.create("a", SomeTask)
+    final SomeTask b = factory.create("b", SomeTask)
+    final SomeTask c = factory.create("c", SomeTask)
+    final SomeOtherTask d = factory.create("d", SomeOtherTask)
+
+    static class SomeTask extends DefaultTask {}
+    static class SomeOtherTask extends DefaultTask {}
+
+    final Class<SomeTask> type = SomeTask
+    final Class<SomeOtherTask> otherType = SomeOtherTask
+
+    @Override
+    List<Task> iterationOrder(Task... elements) {
+        return elements.sort { it.name }
+    }
+
+    def "can remove register providers without realizing them"() {
+        given:
+        def provider1 = container.register("a", type)
+        def provider2 = container.register("b", type)
+
+        when:
+        def didRemoved1 = container.remove(provider1)
+
+        then:
+        didRemoved1
+        container.names.toList() == ['b']
+        !provider1.present
+        provider2.present
+
+        and:
+        0 * taskFactory.create(_ as TaskIdentity)
+
+        when:
+        def didRemoved2 = container.remove(provider2)
+
+        then:
+        didRemoved2
+        container.names.toList() == []
+        !provider1.present
+        !provider2.present
+
+        and:
+        0 * taskFactory.create(_ as TaskIdentity)
+    }
+
+    def "returns false when removing register providers a second time"() {
+        given:
+        def provider1 = container.register("a", type)
+
+        when:
+        def didRemovedFirstTime = container.remove(provider1)
+
+        then:
+        didRemovedFirstTime
+        container.names.toList() == []
+
+        and:
+        0 * taskFactory.create(_ as TaskIdentity)
+
+        when:
+        def didRemovedSecondTime = container.remove(provider1)
+
+        then:
+        !didRemovedSecondTime
+        container.names.toList() == []
+
+        and:
+        0 * taskFactory.create(_ as TaskIdentity)
+    }
+
+    def "can remove realized register providers without realizing more providers"() {
+        1 * taskFactory.create(_ as TaskIdentity) >> { println "A"; a }
+        1 * taskFactory.create(_ as TaskIdentity) >> { println "B"; b }
+
+        given:
+        def provider1 = container.register("a", type)
+        def provider2 = container.register("b", type)
+        def provider3 = container.register("d", otherType)
+
+        // Realize all object of type `type`
+        toList(container.withType(type))
+
+        when:
+        def didRemoved1 = container.remove(provider1)
+
+        then:
+        didRemoved1
+        container.names.toList() == ['b', 'd']
+
+        and:
+        0 * taskFactory.create(_ as TaskIdentity)
+
+        when:
+        def didRemoved2 = container.remove(provider2)
+
+        then:
+        didRemoved2
+        container.names.toList() == ['d']
+
+        and:
+        0 * taskFactory.create(_ as TaskIdentity)
+    }
+
+    def "can remove realized register elements via instance"() {
+        1 * taskFactory.create(_ as TaskIdentity) >> a
+
+        given:
+        def provider1 = container.register("a", type)
+        def provider2 = container.register("d", otherType)
+
+        // Realize all object of type `type`
+        def element = container.withType(type).iterator().next()
+
+        when:
+        def didRemoved = container.remove(element)
+
+        then:
+        didRemoved
+        container.names.toList() == ['d']
+
+        and:
+        0 * taskFactory.create(_ as TaskIdentity)
+    }
+
+    def "will execute remove action when removing register provider only for realized elements"() {
+        1 * taskFactory.create(_ as TaskIdentity) >> a
+        def action = Mock(Action)
+
+        given:
+        def provider1 = container.register("a", type)
+        def provider2 = container.register("d", otherType)
+        container.whenObjectRemoved(action)
+
+        // Realize all object of type `type`
+        toList(container.withType(type))
+
+        when:
+        def didRemoved1 = container.remove(provider1)
+
+        then:
+        didRemoved1
+        container.names.toList() == ['d']
+
+        and:
+        1 * action.execute(a)
+        0 * action.execute(_)
+
+        when:
+        def didRemoved2 = container.remove(provider2)
+
+        then:
+        didRemoved2
+        container.names.toList() == []
+
+        and:
+        0 * action.execute(_)
+    }
+
+    def "will execute remove action when clearing the container only for realized register providers"() {
+        1 * taskFactory.create(_ as TaskIdentity) >> a
+        def action = Mock(Action)
+
+        given:
+        def provider1 = container.register("a", type)
+        def provider2 = container.register("d", otherType)
+        container.whenObjectRemoved(action)
+
+        // Realize all object of type `type`
+        toList(container.withType(type))
+
+        when:
+        container.clear()
+
+        then:
+        container.names.toList() == []
+
+        and:
+        1 * action.execute(a)
+        0 * action.execute(_)
+    }
+
+    def "will not query register providers when clearing"() {
+        given:
+        def provider1 = container.register("a", type)
+        def provider2 = container.register("b", type)
+
+        when:
+        container.clear()
+
+        then:
+        container.names.toList() == []
+
+        and:
+        0 * taskFactory.create(_ as TaskIdentity)
+    }
+
+    def "will execute remove action when not retaining register providers for all elements"() {
+        1 * taskFactory.create(_ as TaskIdentity) >> a
+        1 * taskFactory.create(_ as TaskIdentity) >> d
+        def action = Mock(Action)
+
+        given:
+        def provider1 = container.register("a", type)
+        def provider2 = container.register("d", otherType)
+        container.whenObjectRemoved(action)
+
+        // Realize all object of type `type`
+        toList(container.withType(type))
+
+        when:
+        def didRetained = container.retainAll([])
+
+        then:
+        didRetained
+        container.names.toList() == []
+
+        and:
+        1 * action.execute(a)
+        1 * action.execute(d)
+    }
+
+    def "will query register providers when not retaining them"() {
+        given:
+        def provider1 = container.register("a", type)
+        def provider2 = container.register("b", type)
+
+        when:
+        def didRetained = container.retainAll([provider2.get()])
+
+        then:
+        didRetained
+        container.names.toList() == ['b']
+
+        and:
+        1 * taskFactory.create(_ as TaskIdentity) >> b
+        1 * taskFactory.create(_ as TaskIdentity) >> a
+    }
+
+    def "will query retaining provider when retaining registered providers"() {
+        1 * taskFactory.create(_ as TaskIdentity) >> a
+
+        given:
+        def provider1 = container.register("a", type)
+        def provider2 = container.register("d", otherType)
+
+        // Realize all object of type `type`
+        toList(container.withType(type))
+
+        when:
+        def didRetained = container.retainAll([provider1.get()])
+
+        then:
+        didRetained
+        container.names.toList() == ['a']
+
+        and:
+        1 * taskFactory.create(_ as TaskIdentity) >> d
+    }
+
+    def "will realize all register provider when querying the iterator"() {
+        given:
+        def provider1 = container.register("a", type)
+        def provider2 = container.register("d", otherType)
+
+        when:
+        container.withType(type).iterator()
+
+        then:
+        1 * taskFactory.create(_ as TaskIdentity) >> a
+    }
+
+    def "will execute remove action when removing realized register provider using iterator"() {
+        1 * taskFactory.create(_ as TaskIdentity) >> a
+        1 * taskFactory.create(_ as TaskIdentity) >> b
+        def action = Mock(Action)
+
+        given:
+        def provider1 = container.register("a", type)
+        def provider2 = container.register("b", type)
+        container.whenObjectRemoved(action)
+
+        when:
+        def iterator = container.iterator()
+        println iterator.next()
+        iterator.remove()
+
+        then:
+        container.names.toList() == ['b']
+
+        and:
+        1 * action.execute(a)
+        0 * action.execute(_)
+    }
+
+    def "will execute remove action when removing a collection of register provider only for realized elements"() {
+        1 * taskFactory.create(_ as TaskIdentity) >> a
+        def action = Mock(Action)
+
+        given:
+        def provider1 = container.register("a", type)
+        def provider2 = container.register("d", otherType)
+        container.whenObjectRemoved(action)
+
+        // Realize all object of type `type`
+        toList(container.withType(type))
+
+        when:
+        def didRemoved = container.removeAll([provider1, provider2])
+
+        then:
+        didRemoved
+        container.empty
+
+        and:
+        1 * action.execute(a)
+        0 * action.execute(_)
+    }
+
+    def "can remove unrealized registered element using register provider"() {
+        when:
+        def provider = container.register('obj')
+
+        then:
+        provider.present
+
+        when:
+        container.remove(provider)
+
+        then:
+        container.names.toList() == []
+
+        and:
+        !provider.present
+        provider.orNull == null
+
+        when:
+        provider.get()
+
+        then:
+        def ex = thrown(IllegalStateException)
+        ex.message == "The domain object 'obj' (DefaultTask) for this provider is no longer present in its container."
+    }
+
+    def "can remove unrealized registered element using named provider"() {
+        when:
+        def provider = container.register('obj')
+
+        then:
+        provider.present
+
+        when:
+        container.remove(container.named('obj'))
+
+        then:
+        container.names.toList() == []
+
+        and:
+        !provider.present
+        provider.orNull == null
+
+        when:
+        provider.get()
+
+        then:
+        def ex = thrown(IllegalStateException)
+        ex.message == "The domain object 'obj' (DefaultTask) for this provider is no longer present in its container."
+    }
+
+    def "can remove realized registered element using register provider"() {
+        1 * taskFactory.create(_ as TaskIdentity) >> task('obj')
+
+        when:
+        def provider = container.register('obj')
+        def obj = provider.get()
+
+        then:
+        provider.present
+        obj == container.getByName('obj')
+
+        when:
+        container.remove(provider)
+
+        then:
+        container.names.toList() == []
+
+        and:
+        !provider.present
+        provider.orNull == null
+
+        when:
+        provider.get()
+
+        then:
+        def ex = thrown(IllegalStateException)
+        ex.message == "The domain object 'obj' (DefaultTask) for this provider is no longer present in its container."
+    }
+
+    def "can remove realized registered element using named provider"() {
+        1 * taskFactory.create(_ as TaskIdentity) >> task('obj')
+
+        when:
+        def provider = container.register('obj')
+        def obj = provider.get()
+
+        then:
+        provider.present
+        obj == container.getByName('obj')
+
+        when:
+        container.remove(container.named('obj'))
+
+        then:
+        container.names.toList() == []
+
+        and:
+        !provider.present
+        provider.orNull == null
+
+        when:
+        provider.get()
+
+        then:
+        def ex = thrown(IllegalStateException)
+        ex.message == "The domain object 'obj' (DefaultTask) for this provider is no longer present in its container."
+    }
+
     private ProjectInternal expectTaskLookupInOtherProject(final String projectPath, final String taskName, def task) {
         def otherProject = Mock(ProjectInternal)
         def otherTaskContainer = Mock(TaskContainerInternal)
@@ -1398,6 +1985,7 @@ class DefaultTaskContainerTest extends Specification {
         Mock(type, name: "[task" + taskCount++ + "]") {
             getName() >> name
             getTaskDependency() >> Mock(TaskDependency)
+            getTaskIdentity() >> TaskIdentity.create(name, type, project)
         }
     }
 
@@ -1424,4 +2012,8 @@ class DefaultTaskContainerTest extends Specification {
     }
 
     interface CustomTask extends TaskInternal {}
+
+    interface MyCustomTask extends CustomTask {}
+
+    interface AnotherCustomTask extends TaskInternal {}
 }

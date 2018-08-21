@@ -18,6 +18,7 @@ package org.gradle.internal.locking
 
 import org.gradle.StartParameter
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.api.internal.artifacts.DefaultModuleIdentifier
 import org.gradle.api.internal.file.FileResolver
 import org.gradle.internal.component.external.model.DefaultModuleComponentIdentifier
 import org.gradle.test.fixtures.file.TestFile
@@ -45,13 +46,13 @@ class DefaultDependencyLockingProviderTest extends Specification {
         resolver.canResolveRelativePath() >> true
         resolver.resolve(LockFileReaderWriter.DEPENDENCY_LOCKING_FOLDER) >> lockDir
         startParameter.getLockedDependenciesToUpdate() >> []
-        provider = new DefaultDependencyLockingProvider(resolver, startParameter)
+        provider = new DefaultDependencyLockingProvider(resolver, startParameter, true)
     }
 
     def 'can persist resolved modules as lockfile'() {
         given:
         startParameter.isWriteDependencyLocks() >> true
-        provider = new DefaultDependencyLockingProvider(resolver, startParameter)
+        provider = new DefaultDependencyLockingProvider(resolver, startParameter, true)
         def modules = [module('org', 'foo', '1.0'), module('org','bar','1.3')] as Set
 
         when:
@@ -73,7 +74,7 @@ org:foo:1.0
 
         then:
         result.mustValidateLockState()
-        result.getLockedDependencies() == [newId('org', 'bar', '1.3'), newId('org', 'foo', '1.0')] as Set
+        result.getLockedDependencies() == [newId(DefaultModuleIdentifier.newId('org', 'bar'), '1.3'), newId(DefaultModuleIdentifier.newId('org', 'foo'), '1.0')] as Set
     }
 
     def 'can load lockfile as prefer constraints in update mode'() {
@@ -81,7 +82,7 @@ org:foo:1.0
         startParameter = Mock()
         startParameter.isWriteDependencyLocks() >> true
         startParameter.getLockedDependenciesToUpdate() >> ['org:foo']
-        provider = new DefaultDependencyLockingProvider(resolver, startParameter)
+        provider = new DefaultDependencyLockingProvider(resolver, startParameter, true)
         lockDir.file('conf.lockfile') << """org:bar:1.3
 org:foo:1.0
 """
@@ -90,7 +91,7 @@ org:foo:1.0
 
         then:
         !result.mustValidateLockState()
-        result.getLockedDependencies() == [newId('org', 'bar', '1.3')] as Set
+        result.getLockedDependencies() == [newId(DefaultModuleIdentifier.newId('org', 'bar'), '1.3')] as Set
     }
 
     def 'can filter lock entries using module update patterns'() {
@@ -98,7 +99,7 @@ org:foo:1.0
         startParameter = Mock()
         startParameter.isWriteDependencyLocks() >> true
         startParameter.getLockedDependenciesToUpdate() >> ['org:*']
-        provider = new DefaultDependencyLockingProvider(resolver, startParameter)
+        provider = new DefaultDependencyLockingProvider(resolver, startParameter, true)
         lockDir.file('conf.lockfile') << """org:bar:1.3
 org:foo:1.0
 """
@@ -115,7 +116,7 @@ org:foo:1.0
         startParameter = Mock()
         startParameter.isWriteDependencyLocks() >> true
         startParameter.getLockedDependenciesToUpdate() >> ['org.*:foo']
-        provider = new DefaultDependencyLockingProvider(resolver, startParameter)
+        provider = new DefaultDependencyLockingProvider(resolver, startParameter, true)
         lockDir.file('conf.lockfile') << """org.bar:foo:1.3
 com:foo:1.0
 """
@@ -124,7 +125,7 @@ com:foo:1.0
 
         then:
         !result.mustValidateLockState()
-        result.getLockedDependencies() == [newId('com', 'foo', '1.0')] as Set
+        result.getLockedDependencies() == [newId(DefaultModuleIdentifier.newId('com', 'foo'), '1.0')] as Set
     }
 
     def 'fails with invalid content in lock file'() {
@@ -141,7 +142,7 @@ com:foo:1.0
     }
 
     private ModuleComponentIdentifier module(String org, String name, String version) {
-        return new DefaultModuleComponentIdentifier(org, name, version)
+        return new DefaultModuleComponentIdentifier(DefaultModuleIdentifier.newId(org, name), version)
     }
 
 }
